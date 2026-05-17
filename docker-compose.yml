@@ -1,20 +1,5 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# GHL Analytics Platform — Docker Compose (modo EasyPanel)
-#
-# EasyPanel provee su propio Traefik en los puertos 80/443 y rutea los
-# servicios mediante labels que inyecta a través de su docker-compose.override.yml.
-# Por eso este compose NO incluye Traefik ni labels de routing — los dominios
-# se configuran desde la UI de EasyPanel (Service → Domains).
-#
-# Secretos: nunca hardcodear. Usar EasyPanel Secret Manager para variables [SECRET].
-# ─────────────────────────────────────────────────────────────────────────────
-
 services:
 
-  # ─── POSTGRESQL 16 + pgvector + pg_cron ────────────────────────────────────
-  # Se buildea desde infra/postgres/Dockerfile para asegurar que tanto pgvector
-  # como pg_cron estén disponibles (las imágenes oficiales solo traen uno de
-  # los dos, o ninguno).
   postgres:
     build:
       context: ./infra/postgres
@@ -25,14 +10,12 @@ services:
       POSTGRES_USER:     ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       PGDATA:            ${PGDATA:-/var/lib/postgresql/data}
-    # pg_cron requiere estar listado en shared_preload_libraries
     command: >
       postgres
         -c shared_preload_libraries=pg_cron
         -c cron.database_name=${POSTGRES_DB}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      # Scripts SQL se ejecutan en orden alfabético al primer arranque
       - ./db/init:/docker-entrypoint-initdb.d:ro
       - postgres_backups:/backups
     healthcheck:
@@ -42,8 +25,6 @@ services:
       retries: 5
       start_period: 30s
 
-  # ─── N8N ── Orquestador ETL + receptor de webhooks ─────────────────────────
-  # Dominio: configurar en EasyPanel → n8n → Domains → Port 5678
   n8n:
     image: n8nio/n8n:latest
     restart: unless-stopped
@@ -74,6 +55,21 @@ services:
       EXECUTIONS_DATA_MAX_AGE:       ${EXECUTIONS_DATA_MAX_AGE:-168}
     volumes:
       - n8n_data:/home/node/.n8n
+    networks:
+      - default
+      - easypanel
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=easypanel"
+      - "traefik.http.routers.n8n-http.rule=Host(`${N8N_HOST}`)"
+      - "traefik.http.routers.n8n-http.entrypoints=http"
+      - "traefik.http.routers.n8n-http.middlewares=redirect-to-https@file,bad-gateway-error-page@file"
+      - "traefik.http.routers.n8n-https.rule=Host(`${N8N_HOST}`)"
+      - "traefik.http.routers.n8n-https.entrypoints=https"
+      - "traefik.http.routers.n8n-https.tls=true"
+      - "traefik.http.routers.n8n-https.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.n8n-https.middlewares=bad-gateway-error-page@file"
+      - "traefik.http.services.n8n.loadbalancer.server.port=5678"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:5678/healthz || exit 1"]
       interval: 30s
@@ -81,8 +77,6 @@ services:
       retries: 5
       start_period: 60s
 
-  # ─── METABASE ── Dashboards BI con RLS por cliente ──────────────────────────
-  # Dominio: configurar en EasyPanel → metabase → Domains → Port 3000
   metabase:
     image: metabase/metabase:latest
     restart: unless-stopped
@@ -102,6 +96,21 @@ services:
       MB_SEND_EMAIL_ON_FIRST_LOGIN: ${MB_SEND_EMAIL_ON_FIRST_LOGIN:-false}
     volumes:
       - metabase_data:/metabase-data
+    networks:
+      - default
+      - easypanel
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=easypanel"
+      - "traefik.http.routers.metabase-http.rule=Host(`${MB_DOMAIN}`)"
+      - "traefik.http.routers.metabase-http.entrypoints=http"
+      - "traefik.http.routers.metabase-http.middlewares=redirect-to-https@file,bad-gateway-error-page@file"
+      - "traefik.http.routers.metabase-https.rule=Host(`${MB_DOMAIN}`)"
+      - "traefik.http.routers.metabase-https.entrypoints=https"
+      - "traefik.http.routers.metabase-https.tls=true"
+      - "traefik.http.routers.metabase-https.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.metabase-https.middlewares=bad-gateway-error-page@file"
+      - "traefik.http.services.metabase.loadbalancer.server.port=3000"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:3000/api/health || exit 1"]
       interval: 60s
@@ -109,21 +118,77 @@ services:
       retries: 5
       start_period: 120s
 
-  # ─── UPTIME KUMA ── Monitoreo de salud de todos los servicios ───────────────
-  # Dominio: configurar en EasyPanel → uptime-kuma → Domains → Port 3001
   uptime-kuma:
     image: louislam/uptime-kuma:latest
     restart: unless-stopped
     volumes:
       - kuma_data:/app/data
+    networks:
+      - default
+      - easypanel
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=easypanel"
+      - "traefik.http.routers.kuma-http.rule=Host(`${KUMA_DOMAIN}`)"
+      - "traefik.http.routers.kuma-http.entrypoints=http"
+      - "traefik.http.routers.kuma-http.middlewares=redirect-to-https@file,bad-gateway-error-page@file"
+      - "traefik.http.routers.kuma-https.rule=Host(`${KUMA_DOMAIN}`)"
+      - "traefik.http.routers.kuma-https.entrypoints=https"
+      - "traefik.http.routers.kuma-https.tls=true"
+      - "traefik.http.routers.kuma-https.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.kuma-https.middlewares=bad-gateway-error-page@file"
+      - "traefik.http.services.kuma.loadbalancer.server.port=3001"
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3001', r => process.exit(r.statusCode===200?0:1))\" || exit 1"]
+      test: ["CMD-SHELL", "node -e \"require('http').get({hostname:'localhost',port:3001,path:'/'},(r)=>{process.exit(r.statusCode<400?0:1)}).on('error',()=>process.exit(1))\""]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 30s
 
-# ─── VOLÚMENES PERSISTENTES ──────────────────────────────────────────────────
+  portal:
+    build:
+      context: ./portal
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST:           postgres
+      POSTGRES_PORT:           5432
+      POSTGRES_DB:             ${POSTGRES_DB}
+      POSTGRES_USER:           ${POSTGRES_USER}
+      POSTGRES_PASSWORD:       ${POSTGRES_PASSWORD}
+      METABASE_SITE_URL:       ${MB_SITE_URL}
+      MB_EMBEDDING_SECRET_KEY: ${MB_EMBEDDING_SECRET_KEY}
+      PORTAL_ADMIN_USER:       ${PORTAL_ADMIN_USER}
+      PORTAL_ADMIN_PASSWORD:   ${PORTAL_ADMIN_PASSWORD}
+      NEXT_PUBLIC_PORTAL_URL:  https://${PORTAL_DOMAIN}
+      NODE_ENV:                production
+    volumes:
+      - portal_data:/app/.next/cache
+    networks:
+      - default
+      - easypanel
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=easypanel"
+      - "traefik.http.routers.portal-http.rule=Host(`${PORTAL_DOMAIN}`)"
+      - "traefik.http.routers.portal-http.entrypoints=http"
+      - "traefik.http.routers.portal-http.middlewares=redirect-to-https@file,bad-gateway-error-page@file"
+      - "traefik.http.routers.portal-https.rule=Host(`${PORTAL_DOMAIN}`)"
+      - "traefik.http.routers.portal-https.entrypoints=https"
+      - "traefik.http.routers.portal-https.tls=true"
+      - "traefik.http.routers.portal-https.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.portal-https.middlewares=bad-gateway-error-page@file"
+      - "traefik.http.services.portal.loadbalancer.server.port=4000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4000/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
 volumes:
   postgres_data:
     driver: local
@@ -135,8 +200,11 @@ volumes:
     driver: local
   kuma_data:
     driver: local
+  portal_data:
+    driver: local
 
-# ─── RED INTERNA ─────────────────────────────────────────────────────────────
-# EasyPanel adjunta los servicios a su red (normalmente "easypanel_default")
-# para que el Traefik nativo pueda enrutarlos. Los servicios se ven entre sí
-# por nombre (postgres, n8n, metabase, uptime-kuma).
+networks:
+  default:
+    driver: bridge
+  easypanel:
+    external: true
