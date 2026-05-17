@@ -1,44 +1,24 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# GHL Analytics Platform — Docker Compose
-# Desplegado en EasyPanel sobre VPS Hostinger
-# NUNCA hardcodear secretos: usar EasyPanel Secret Manager para variables [SECRET]
+# GHL Analytics Platform — Docker Compose (modo EasyPanel)
+#
+# EasyPanel provee su propio Traefik en los puertos 80/443 y rutea los
+# servicios mediante labels que inyecta a través de su docker-compose.override.yml.
+# Por eso este compose NO incluye Traefik ni labels de routing — los dominios
+# se configuran desde la UI de EasyPanel (Service → Domains).
+#
+# Secretos: nunca hardcodear. Usar EasyPanel Secret Manager para variables [SECRET].
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
 
-  # ─── TRAEFIK ── Reverse proxy con HTTPS automático (Let's Encrypt) ─────────
-  traefik:
-    image: traefik:v3.0
-    restart: unless-stopped
-    command:
-      - "--configFile=/etc/traefik/traefik.yml"
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./infra/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
-      - ./infra/traefik/dynamic:/etc/traefik/dynamic:ro
-      - traefik_certs:/certs
-    healthcheck:
-      test: ["CMD", "traefik", "healthcheck", "--ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-    labels:
-      - "traefik.enable=true"
-      # Dashboard interno de Traefik (solo acceso local — no exponer en prod)
-      - "traefik.http.routers.traefik-dashboard.rule=Host(`traefik.${DOMAIN}`) && PathPrefix(`/dashboard`)"
-      - "traefik.http.routers.traefik-dashboard.entrypoints=websecure"
-      - "traefik.http.routers.traefik-dashboard.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.traefik-dashboard.service=api@internal"
-
-  # ─── POSTGRESQL 16 ── Warehouse principal con extensiones ──────────────────
-  # IMPORTANTE: usar pgvector/pgvector:pg16 (no postgres:16-alpine)
-  # La imagen oficial de PostgreSQL no incluye pgvector. Esta imagen es
-  # equivalente a postgres:16 + extensión pgvector precompilada.
+  # ─── POSTGRESQL 16 + pgvector + pg_cron ────────────────────────────────────
+  # Se buildea desde infra/postgres/Dockerfile para asegurar que tanto pgvector
+  # como pg_cron estén disponibles (las imágenes oficiales solo traen uno de
+  # los dos, o ninguno).
   postgres:
-    image: pgvector/pgvector:pg16
+    build:
+      context: ./infra/postgres
+      dockerfile: Dockerfile
     restart: unless-stopped
     environment:
       POSTGRES_DB:       ${POSTGRES_DB}
@@ -61,11 +41,9 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
-    # PostgreSQL NO se expone al exterior — acceso solo desde la red interna
-    labels:
-      - "traefik.enable=false"
 
   # ─── N8N ── Orquestador ETL + receptor de webhooks ─────────────────────────
+  # Dominio: configurar en EasyPanel → n8n → Domains → Port 5678
   n8n:
     image: n8nio/n8n:latest
     restart: unless-stopped
@@ -73,31 +51,25 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      # Autenticación de UI
       N8N_BASIC_AUTH_ACTIVE:       ${N8N_BASIC_AUTH_ACTIVE:-true}
       N8N_BASIC_AUTH_USER:         ${N8N_BASIC_AUTH_USER}
       N8N_BASIC_AUTH_PASSWORD:     ${N8N_BASIC_AUTH_PASSWORD}
-      # Red y protocolo
       N8N_HOST:                    ${N8N_HOST}
       N8N_PORT:                    5678
       N8N_PROTOCOL:                https
       WEBHOOK_URL:                 ${WEBHOOK_URL}
-      # Base de datos interna de n8n (BD separada, no la de analytics)
       DB_TYPE:                     postgresdb
       DB_POSTGRESDB_HOST:          postgres
       DB_POSTGRESDB_PORT:          5432
       DB_POSTGRESDB_DATABASE:      ${DB_POSTGRESDB_DATABASE:-n8n_internal}
       DB_POSTGRESDB_USER:          ${DB_POSTGRESDB_USER}
       DB_POSTGRESDB_PASSWORD:      ${DB_POSTGRESDB_PASSWORD}
-      # Seguridad
       N8N_ENCRYPTION_KEY:          ${N8N_ENCRYPTION_KEY}
-      # GHL + Meta
       GHL_API_KEY:                 ${GHL_API_KEY}
       GHL_LOCATION_IDS:            ${GHL_LOCATION_IDS}
       WEBHOOK_SECRET:              ${WEBHOOK_SECRET}
       META_CLOUD_API_TOKEN:        ${META_CLOUD_API_TOKEN}
       META_VERIFY_TOKEN:           ${META_VERIFY_TOKEN}
-      # Retención de ejecuciones (7 días)
       EXECUTIONS_DATA_SAVE_ON_ERROR: ${EXECUTIONS_DATA_SAVE_ON_ERROR:-all}
       EXECUTIONS_DATA_MAX_AGE:       ${EXECUTIONS_DATA_MAX_AGE:-168}
     volumes:
@@ -108,24 +80,9 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
-    labels:
-      - "traefik.enable=true"
-      # Router n8n — subdominio n8n.${DOMAIN}
-      - "traefik.http.routers.n8n.rule=Host(`${N8N_HOST}`)"
-      - "traefik.http.routers.n8n.entrypoints=websecure"
-      - "traefik.http.routers.n8n.tls.certresolver=letsencrypt"
-      - "traefik.http.services.n8n.loadbalancer.server.port=5678"
-      # Rate limit: 500 req / 10s para webhooks inbound (GHL + Meta)
-      - "traefik.http.middlewares.n8n-rl.ratelimit.average=500"
-      - "traefik.http.middlewares.n8n-rl.ratelimit.period=10s"
-      - "traefik.http.middlewares.n8n-rl.ratelimit.burst=50"
-      # Rate limit específico para n8n UI: 60 req / 1 min
-      - "traefik.http.middlewares.n8n-ui-rl.ratelimit.average=60"
-      - "traefik.http.middlewares.n8n-ui-rl.ratelimit.period=1m"
-      - "traefik.http.middlewares.n8n-ui-rl.ratelimit.burst=20"
-      - "traefik.http.routers.n8n.middlewares=n8n-rl,cors-strict@file"
 
   # ─── METABASE ── Dashboards BI con RLS por cliente ──────────────────────────
+  # Dominio: configurar en EasyPanel → metabase → Domains → Port 3000
   metabase:
     image: metabase/metabase:latest
     restart: unless-stopped
@@ -133,17 +90,14 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      # BD de estado interno de Metabase (separada de analytics)
       MB_DB_TYPE:              postgres
       MB_DB_HOST:              postgres
       MB_DB_PORT:              5432
       MB_DB_DBNAME:            ${MB_DB_DBNAME:-metabase_app}
       MB_DB_USER:              ${MB_DB_USER}
       MB_DB_PASS:              ${MB_DB_PASS}
-      # URL pública y configuración
       MB_SITE_URL:             ${MB_SITE_URL}
       MB_EMBEDDING_SECRET_KEY: ${MB_EMBEDDING_SECRET_KEY}
-      # Timezone Colombia — crítico para reportes de fecha
       JAVA_TIMEZONE:           America/Bogota
       MB_SEND_EMAIL_ON_FIRST_LOGIN: ${MB_SEND_EMAIL_ON_FIRST_LOGIN:-false}
     volumes:
@@ -154,24 +108,9 @@ services:
       timeout: 20s
       retries: 5
       start_period: 120s
-    labels:
-      - "traefik.enable=true"
-      # Router Metabase — subdominio analytics.${DOMAIN}
-      - "traefik.http.routers.metabase.rule=Host(`analytics.${DOMAIN}`)"
-      - "traefik.http.routers.metabase.entrypoints=websecure"
-      - "traefik.http.routers.metabase.tls.certresolver=letsencrypt"
-      - "traefik.http.services.metabase.loadbalancer.server.port=3000"
-      # Rate limit UI: 120 req / 1 min por IP
-      - "traefik.http.middlewares.mb-rl.ratelimit.average=120"
-      - "traefik.http.middlewares.mb-rl.ratelimit.period=1m"
-      - "traefik.http.middlewares.mb-rl.ratelimit.burst=30"
-      # Rate limit API embeds: 300 req / 1 min
-      - "traefik.http.middlewares.mb-api-rl.ratelimit.average=300"
-      - "traefik.http.middlewares.mb-api-rl.ratelimit.period=1m"
-      - "traefik.http.middlewares.mb-api-rl.ratelimit.burst=50"
-      - "traefik.http.routers.metabase.middlewares=mb-rl,cors-strict@file"
 
   # ─── UPTIME KUMA ── Monitoreo de salud de todos los servicios ───────────────
+  # Dominio: configurar en EasyPanel → uptime-kuma → Domains → Port 3001
   uptime-kuma:
     image: louislam/uptime-kuma:latest
     restart: unless-stopped
@@ -183,14 +122,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-    labels:
-      - "traefik.enable=true"
-      # Router Uptime Kuma — subdominio uptime.${DOMAIN}
-      - "traefik.http.routers.kuma.rule=Host(`uptime.${DOMAIN}`)"
-      - "traefik.http.routers.kuma.entrypoints=websecure"
-      - "traefik.http.routers.kuma.tls.certresolver=letsencrypt"
-      - "traefik.http.services.kuma.loadbalancer.server.port=3001"
-      - "traefik.http.routers.kuma.middlewares=cors-strict@file"
 
 # ─── VOLÚMENES PERSISTENTES ──────────────────────────────────────────────────
 volumes:
@@ -204,9 +135,8 @@ volumes:
     driver: local
   kuma_data:
     driver: local
-  traefik_certs:
-    driver: local
 
 # ─── RED INTERNA ─────────────────────────────────────────────────────────────
-# EasyPanel crea una red bridge por defecto; los servicios se comunican
-# por nombre de servicio (postgres, n8n, metabase).
+# EasyPanel adjunta los servicios a su red (normalmente "easypanel_default")
+# para que el Traefik nativo pueda enrutarlos. Los servicios se ven entre sí
+# por nombre (postgres, n8n, metabase, uptime-kuma).
