@@ -4,8 +4,6 @@
 # NUNCA hardcodear secretos: usar EasyPanel Secret Manager para variables [SECRET]
 # ─────────────────────────────────────────────────────────────────────────────
 
-version: "3.9"
-
 services:
 
   # ─── TRAEFIK ── Reverse proxy con HTTPS automático (Let's Encrypt) ─────────
