@@ -1,0 +1,90 @@
+{
+  "name": "Contactos",
+  "description": "Nuevos contactos por dia/semana/mes, distribucion por fuente UTM y canal, top tags, distribucion por contact_type y contactos con ai_lead_score alto sin oportunidad.",
+  "parameters": [
+    {
+      "name": "Location",
+      "slug": "location_id",
+      "type": "category",
+      "required": false,
+      "default": null
+    },
+    {
+      "name": "Fecha inicio",
+      "slug": "date_from",
+      "type": "date/single",
+      "required": false
+    },
+    {
+      "name": "Fecha fin",
+      "slug": "date_to",
+      "type": "date/single",
+      "required": false
+    },
+    {
+      "name": "Granularidad",
+      "slug": "granularity",
+      "type": "category",
+      "required": false,
+      "default": "day"
+    }
+  ],
+  "cards": [
+    {
+      "name": "Nuevos contactos por dia",
+      "visualization": "line",
+      "query_file": "queries/03_contacts_new_by_day.sql",
+      "size": { "width": 12, "height": 6 },
+      "filters": ["location_id", "date_from", "date_to"]
+    },
+    {
+      "name": "Total contactos activos",
+      "visualization": "scalar",
+      "query_file": "queries/03_contacts_total_active.sql",
+      "size": { "width": 4, "height": 3 },
+      "filters": ["location_id"]
+    },
+    {
+      "name": "Nuevos este mes",
+      "visualization": "scalar",
+      "query_file": "queries/03_contacts_new_this_month.sql",
+      "size": { "width": 4, "height": 3 },
+      "filters": ["location_id"]
+    },
+    {
+      "name": "Distribucion por fuente UTM",
+      "visualization": "pie",
+      "query_file": "queries/03_contacts_by_utm_source.sql",
+      "size": { "width": 6, "height": 6 },
+      "filters": ["location_id", "date_from", "date_to"]
+    },
+    {
+      "name": "Distribucion por canal",
+      "visualization": "pie",
+      "query_file": "queries/03_contacts_by_channel.sql",
+      "size": { "width": 6, "height": 6 },
+      "filters": ["location_id", "date_from", "date_to"]
+    },
+    {
+      "name": "Top tags de contactos",
+      "visualization": "bar",
+      "query_file": "queries/03_contacts_top_tags.sql",
+      "size": { "width": 6, "height": 6 },
+      "filters": ["location_id"]
+    },
+    {
+      "name": "Distribucion por contact_type",
+      "visualization": "pie",
+      "query_file": "queries/03_contacts_by_type.sql",
+      "size": { "width": 6, "height": 6 },
+      "filters": ["location_id"]
+    },
+    {
+      "name": "Leads con ai_score alto sin oportunidad",
+      "visualization": "table",
+      "query_file": "queries/03_contacts_high_score_no_opp.sql",
+      "size": { "width": 12, "height": 6 },
+      "filters": ["location_id"]
+    }
+  ]
+}

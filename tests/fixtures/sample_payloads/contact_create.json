@@ -1,0 +1,29 @@
+{
+  "type": "ContactCreate",
+  "locationId": "loc_abc123",
+  "id": "contact_sample_001",
+  "email": "juan.perez@example.com",
+  "phone": "+573001234567",
+  "firstName": "Juan",
+  "lastName": "Perez",
+  "source": "Facebook Lead Ad",
+  "tags": ["lead", "facebook", "octubre-2026"],
+  "contactType": "lead",
+  "dnd": false,
+  "customFields": {
+    "producto_interes": "Plan Premium",
+    "ciudad": "Bogota"
+  },
+  "attributionSource": {
+    "utmSource": "facebook",
+    "utmMedium": "paid_social",
+    "utmCampaign": "remarketing_q4_2026",
+    "utmContent": "video_testimonios",
+    "utmTerm": "crm_ventas",
+    "url": "https://sixteam.pro/demo?utm_source=facebook&utm_medium=paid_social",
+    "referrer": "https://www.facebook.com/",
+    "fbclid": "IwAR1234abcd_efgh5678"
+  },
+  "dateAdded": "2026-10-15T14:30:00.000Z",
+  "dateUpdated": "2026-10-15T14:30:00.000Z"
+}

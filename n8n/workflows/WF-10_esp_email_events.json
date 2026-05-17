@@ -1,0 +1,80 @@
+{
+  "name": "WF-10 ESP Email Events",
+  "nodes": [
+    {
+      "id": "node-01-webhook",
+      "name": "Webhook ESP Events",
+      "type": "n8n-nodes-base.webhook",
+      "position": [240, 300],
+      "parameters": {
+        "path": "esp/events",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": { "rawBody": true }
+      }
+    },
+    {
+      "id": "node-02-detect-esp",
+      "name": "Detectar ESP y Normalizar",
+      "type": "n8n-nodes-base.code",
+      "position": [460, 300],
+      "parameters": {
+        "jsCode": "// Detectar origen (Mailgun o SendGrid) y normalizar al schema fact_email_events\n// Referencia: GHL_Database.txt fact_email_events\n\nconst REGEX_EMAIL = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$/;\n\nfunction cleanStr(val, maxLen) { if (!val) return null; const s = String(val).trim().substring(0, maxLen); return s.length > 0 ? s : null; }\nfunction validateEmail(val) { if (!val) return null; const n = String(val).toLowerCase().trim().substring(0, 255); return REGEX_EMAIL.test(n) ? n : null; }\nfunction parseISODate(val) { if (!val) return null; const ts = Date.parse(String(val)); return isNaN(ts) ? null : new Date(ts).toISOString(); }\n\nconst raw     = $input.first().json;\nconst headers = $input.first().headers || {};\nconst ua      = (headers['user-agent'] || '').toLowerCase();\n\nlet events = [];\n\n// --- Mailgun ---\n// Mailgun envía un objeto plano por webhook (un evento por request)\n// o puede enviar un array en 'event-data' anidado\nif (ua.includes('mailgun') || raw['event-data'] !== undefined || raw['event'] !== undefined) {\n  const evData = raw['event-data'] || raw;\n  const evType = cleanStr(evData.event || raw.event, 30);\n  const msgId  = cleanStr(evData.message?.headers?.['message-id'] || evData['message-id'] || raw['Message-Id'], 200);\n  const email  = validateEmail(evData.recipient || evData.email || raw.recipient);\n\n  if (evType && (msgId || email)) {\n    events.push({\n      event_id:      cleanStr(evData.id || evData.token || (msgId + '_' + Date.now()), 200),\n      message_id:    msgId,\n      contact_id:    null,  // se correlacionara por email si hace falta\n      location_id:   cleanStr(evData['user-variables']?.location_id || raw['location_id'] || '', 50) || 'unknown',\n      event_type:    evType,\n      email,\n      subject:       cleanStr(evData.message?.headers?.subject || evData.subject, 500),\n      url:           cleanStr(evData.url || evData['clicked-url'], 2048),\n      bounce_type:   cleanStr(evData['delivery-status']?.message ? 'hard' : null, 30),\n      bounce_reason: cleanStr(evData['delivery-status']?.message || evData.reason, 2048),\n      client_type:   cleanStr(evData['client-info']?.['client-name'], 50),\n      device_type:   cleanStr(evData['client-info']?.['device-type'], 30),\n      country:       cleanStr(evData['geolocation']?.country, 2),\n      esp:           'mailgun',\n      occurred_at:   parseISODate(evData.timestamp ? new Date(evData.timestamp * 1000).toISOString() : null) || new Date().toISOString()\n    });\n  }\n}\n// --- SendGrid ---\n// SendGrid envía un array de eventos por POST\nelse if (Array.isArray(raw) || (raw[0] && raw[0].sg_event_id !== undefined)) {\n  const list = Array.isArray(raw) ? raw : [raw];\n  for (const ev of list) {\n    const evType  = cleanStr(ev.event, 30);\n    const msgId   = cleanStr(ev.smtp_id || ev['smtp-id'] || ev.sg_message_id, 200);\n    const email   = validateEmail(ev.email);\n    if (!evType) continue;\n    events.push({\n      event_id:      cleanStr(ev.sg_event_id || (msgId + '_' + Date.now()), 200),\n      message_id:    msgId,\n      contact_id:    null,\n      location_id:   cleanStr(ev.location_id || '', 50) || 'unknown',\n      event_type:    evType,\n      email,\n      subject:       null,\n      url:           cleanStr(ev.url, 2048),\n      bounce_type:   cleanStr(ev.type, 30),\n      bounce_reason: cleanStr(ev.reason, 2048),\n      client_type:   cleanStr(ev.useragent, 50),\n      device_type:   null,\n      country:       null,\n      esp:           'sendgrid',\n      occurred_at:   parseISODate(ev.timestamp ? new Date(ev.timestamp * 1000).toISOString() : null) || new Date().toISOString()\n    });\n  }\n} else {\n  // Formato desconocido — loguear y responder 200 para no causar reintentos\n  return [{ json: { _skip: true, reason: 'ESP desconocido' } }];\n}\n\nif (events.length === 0) return [{ json: { _skip: true, reason: 'Sin eventos validos' } }];\n\nreturn events.map(e => ({ json: e }));"
+      }
+    },
+    {
+      "id": "node-03-skip-check",
+      "name": "Tiene Eventos Validos?",
+      "type": "n8n-nodes-base.if",
+      "position": [680, 300],
+      "parameters": {
+        "conditions": {
+          "boolean": [{ "value1": "={{ $json._skip === true }}", "value2": false }]
+        }
+      }
+    },
+    {
+      "id": "node-04-insert",
+      "name": "INSERT fact_email_events",
+      "type": "n8n-nodes-base.postgres",
+      "position": [900, 220],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO fact_email_events (event_id, message_id, contact_id, location_id, event_type, email, subject, url, bounce_type, bounce_reason, client_type, device_type, country, esp, occurred_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT (event_id) DO NOTHING",
+        "additionalFields": {
+          "queryParams": "={{ [ $json.event_id, $json.message_id, $json.contact_id, $json.location_id, $json.event_type, $json.email, $json.subject, $json.url, $json.bounce_type, $json.bounce_reason, $json.client_type, $json.device_type, $json.country, $json.esp, $json.occurred_at ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      }
+    },
+    {
+      "id": "node-05-respond",
+      "name": "Responder 200 OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [1120, 300],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"ok\" }",
+        "options": { "responseCode": 200 }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook ESP Events": { "main": [[{ "node": "Detectar ESP y Normalizar", "type": "main", "index": 0 }]] },
+    "Detectar ESP y Normalizar": { "main": [[{ "node": "Tiene Eventos Validos?", "type": "main", "index": 0 }]] },
+    "Tiene Eventos Validos?": {
+      "main": [
+        [{ "node": "INSERT fact_email_events", "type": "main", "index": 0 }],
+        [{ "node": "Responder 200 OK", "type": "main", "index": 0 }]
+      ]
+    },
+    "INSERT fact_email_events": { "main": [[{ "node": "Responder 200 OK", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": false
+  }
+}

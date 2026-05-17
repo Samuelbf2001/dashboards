@@ -1,0 +1,18 @@
+{
+  "type": "AppointmentCreate",
+  "locationId": "loc_abc123",
+  "id": "appt_sample_001",
+  "contactId": "contact_sample_001",
+  "title": "Llamada de cierre - Juan Perez",
+  "assignedUserId": "user_asesor_001",
+  "assignedUserName": "Maria Lopez",
+  "calendarId": "cal_ventas_001",
+  "calendarName": "Calendario Ventas",
+  "startTime": "2026-10-20T10:00:00.000Z",
+  "endTime": "2026-10-20T10:30:00.000Z",
+  "status": "confirmed",
+  "notes": "Cliente interesado en Plan Premium. Llevar propuesta actualizada.",
+  "address": "Google Meet",
+  "dateAdded": "2026-10-15T17:30:00.000Z",
+  "dateUpdated": "2026-10-15T17:30:00.000Z"
+}

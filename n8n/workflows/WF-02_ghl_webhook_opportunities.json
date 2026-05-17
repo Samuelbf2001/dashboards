@@ -1,0 +1,248 @@
+{
+  "name": "WF-02 GHL Webhook Opportunities",
+  "nodes": [
+    {
+      "id": "node-01-webhook",
+      "name": "Webhook GHL Oportunidades",
+      "type": "n8n-nodes-base.webhook",
+      "position": [240, 300],
+      "parameters": {
+        "path": "ghl/opportunities",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": { "rawBody": true }
+      }
+    },
+    {
+      "id": "node-02-hmac",
+      "name": "Validar HMAC GHL",
+      "type": "n8n-nodes-base.code",
+      "position": [460, 300],
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst rawBody   = $input.first().binary?.data ? Buffer.from($input.first().binary.data, 'base64').toString('utf8') : JSON.stringify($input.first().json);\nconst sigHeader = $input.first().headers['x-ghl-signature'] || '';\nconst secret    = $env.WEBHOOK_SECRET;\nif (!secret) throw new Error('WEBHOOK_SECRET no configurado');\nif (!sigHeader) throw new Error('HMAC: header X-GHL-Signature ausente');\nconst receivedHex = sigHeader.startsWith('sha256=') ? sigHeader.slice(7) : sigHeader;\nconst receivedBuf = Buffer.from(receivedHex, 'hex');\nconst hmac = crypto.createHmac('sha256', secret);\nhmac.update(rawBody);\nconst expectedBuf = Buffer.from(hmac.digest('hex'), 'hex');\nif (receivedBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(receivedBuf, expectedBuf)) {\n  throw new Error('HMAC: firma invalida');\n}\nreturn $input.all();"
+      }
+    },
+    {
+      "id": "node-03-sanitize",
+      "name": "Sanitizar Oportunidad",
+      "type": "n8n-nodes-base.code",
+      "position": [680, 300],
+      "parameters": {
+        "jsCode": "// Sanitizar payload de oportunidad GHL (SEC-06)\nconst REGEX_GHL_ID      = /^[a-zA-Z0-9_-]{8,50}$/;\nconst REGEX_LOCATION_ID = /^[a-zA-Z0-9]{10,30}$/;\n\nfunction cleanStr(val, maxLen) {\n  if (val === null || val === undefined) return null;\n  const s = String(val).trim().substring(0, maxLen);\n  return s.length > 0 ? s : null;\n}\nfunction validateGHLId(val) {\n  if (!val) return null;\n  const s = String(val).trim();\n  return REGEX_GHL_ID.test(s) ? s : null;\n}\nfunction parseISODate(val) {\n  if (!val) return null;\n  const ts = Date.parse(String(val));\n  return isNaN(ts) ? null : new Date(ts).toISOString();\n}\nfunction parseFloatSafe(val) {\n  if (val === null || val === undefined || val === '') return null;\n  const n = parseFloat(val);\n  return isNaN(n) ? null : n;\n}\n\nconst raw  = $input.first().json;\nconst body = raw.body || raw;\n\nconst opportunity_id = validateGHLId(body.id || body.opportunityId);\nconst contact_id     = validateGHLId(body.contactId || body.contact_id);\nconst location_id    = REGEX_LOCATION_ID.test(String(body.locationId || '').trim()) ? String(body.locationId).trim() : null;\n\nif (!opportunity_id) throw new Error('opportunity_id invalido: ' + (body.id || body.opportunityId));\nif (!contact_id)     throw new Error('contact_id invalido');\nif (!location_id)    throw new Error('location_id invalido');\n\nconst validStatuses = ['open', 'won', 'lost', 'abandoned'];\nconst status = cleanStr(body.status, 20);\n\nconst clean = {\n  opportunity_id,\n  contact_id,\n  location_id,\n  pipeline_id:         validateGHLId(body.pipelineId),\n  pipeline_name:       cleanStr(body.pipelineName, 200),\n  pipeline_stage_id:   validateGHLId(body.pipelineStageId),\n  stage_name:          cleanStr(body.stageName, 200),\n  status:              validStatuses.includes(status) ? status : null,\n  monetary_value:      parseFloatSafe(body.monetaryValue) ?? 0,\n  currency:            cleanStr(body.currency, 3) || 'COP',\n  assigned_to_user_id: validateGHLId(body.assignedTo),\n  assigned_to_name:    cleanStr(body.assignedToName, 200),\n  custom_fields:       (body.customFields && typeof body.customFields === 'object') ? body.customFields : null,\n  close_date:          parseISODate(body.closeDate),\n  ghl_created_at:      parseISODate(body.dateAdded || body.createdAt),\n  ghl_updated_at:      parseISODate(body.dateUpdated || body.updatedAt),\n  synced_at:           new Date().toISOString(),\n  // Para fact_opp_stage_history\n  _prev_stage_id:      validateGHLId(body.previousStageId || body.prevStageId),\n  _prev_stage_name:    cleanStr(body.previousStageName || body.prevStageName, 200),\n  _changed_at:         parseISODate(body.dateUpdated || body.updatedAt) || new Date().toISOString()\n};\n\nreturn [{ json: clean }];"
+      }
+    },
+    {
+      "id": "node-04-scd2-check",
+      "name": "Verificar SCD2 dim_opportunities",
+      "type": "n8n-nodes-base.postgres",
+      "position": [900, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT surrogate_key, opportunity_id, pipeline_stage_id, status, monetary_value, assigned_to_user_id, pipeline_id, ghl_updated_at FROM dim_opportunities WHERE opportunity_id = $1 AND is_current = TRUE LIMIT 1",
+        "additionalFields": {
+          "queryParams": "={{ [$json.opportunity_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      }
+    },
+    {
+      "id": "node-05-scd2-logic",
+      "name": "Logica SCD2 Oportunidades",
+      "type": "n8n-nodes-base.code",
+      "position": [1120, 300],
+      "parameters": {
+        "jsCode": "const TRACKED = ['pipeline_stage_id', 'status', 'monetary_value', 'assigned_to_user_id', 'pipeline_id'];\nconst incoming = $('Sanitizar Oportunidad').first().json;\nconst existing = $input.first().json;\nconst now = new Date().toISOString();\n\nif (!existing || !existing.surrogate_key) {\n  return [{ json: { action: 'INSERT', record: Object.assign({}, incoming, { valid_from: now, valid_to: null, is_current: true, change_reason: 'initial_insert' }) } }];\n}\n\nconst changedFields = TRACKED.filter(f => String(existing[f] ?? null) !== String(incoming[f] ?? null));\n\nconst stageChanged = changedFields.includes('pipeline_stage_id');\n\nif (changedFields.length > 0) {\n  return [{ json: {\n    action:          'SCD_UPDATE',\n    close_surrogate: existing.surrogate_key,\n    close_valid_to:  now,\n    stage_changed:   stageChanged,\n    prev_stage_id:   existing.pipeline_stage_id,\n    prev_stage_name: existing.stage_name,\n    record:          Object.assign({}, incoming, { valid_from: now, valid_to: null, is_current: true, change_reason: changedFields.map(f => f + '_change').join(', ') })\n  } }];\n}\n\nreturn [{ json: { action: 'UPDATE_MINOR', surrogate_key: existing.surrogate_key, synced_at: now, ghl_updated_at: incoming.ghl_updated_at || now, custom_fields: incoming.custom_fields } }];"
+      }
+    },
+    {
+      "id": "node-06-branch",
+      "name": "Rama por Accion",
+      "type": "n8n-nodes-base.switch",
+      "position": [1340, 300],
+      "parameters": {
+        "mode": "expression",
+        "output": "={{ $json.action }}",
+        "rules": {
+          "values": [
+            { "conditions": { "string": [{ "value1": "={{ $json.action }}", "operation": "equal", "value2": "INSERT" }] } },
+            { "conditions": { "string": [{ "value1": "={{ $json.action }}", "operation": "equal", "value2": "SCD_UPDATE" }] } },
+            { "conditions": { "string": [{ "value1": "={{ $json.action }}", "operation": "equal", "value2": "UPDATE_MINOR" }] } }
+          ]
+        }
+      }
+    },
+    {
+      "id": "node-07-insert",
+      "name": "INSERT dim_opportunities",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1560, 160],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO dim_opportunities (opportunity_id, contact_id, location_id, pipeline_id, pipeline_name, pipeline_stage_id, stage_name, status, monetary_value, currency, assigned_to_user_id, assigned_to_name, custom_fields, close_date, valid_from, valid_to, is_current, change_reason, ghl_created_at, ghl_updated_at, synced_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)",
+        "additionalFields": {
+          "queryParams": "={{ [ $json.record.opportunity_id, $json.record.contact_id, $json.record.location_id, $json.record.pipeline_id, $json.record.pipeline_name, $json.record.pipeline_stage_id, $json.record.stage_name, $json.record.status, $json.record.monetary_value, $json.record.currency, $json.record.assigned_to_user_id, $json.record.assigned_to_name, JSON.stringify($json.record.custom_fields), $json.record.close_date, $json.record.valid_from, $json.record.valid_to, $json.record.is_current, $json.record.change_reason, $json.record.ghl_created_at, $json.record.ghl_updated_at, $json.record.synced_at ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      }
+    },
+    {
+      "id": "node-08-scd-close",
+      "name": "SCD2 Cerrar Version Oportunidad",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1560, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE dim_opportunities SET valid_to = $1, is_current = FALSE WHERE surrogate_key = $2",
+        "additionalFields": {
+          "queryParams": "={{ [ $json.close_valid_to, $json.close_surrogate ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      }
+    },
+    {
+      "id": "node-09-scd-insert",
+      "name": "SCD2 INSERT Nueva Version Opp",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1780, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO dim_opportunities (opportunity_id, contact_id, location_id, pipeline_id, pipeline_name, pipeline_stage_id, stage_name, status, monetary_value, currency, assigned_to_user_id, assigned_to_name, custom_fields, close_date, valid_from, valid_to, is_current, change_reason, ghl_created_at, ghl_updated_at, synced_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)",
+        "additionalFields": {
+          "queryParams": "={{ [ $json.record.opportunity_id, $json.record.contact_id, $json.record.location_id, $json.record.pipeline_id, $json.record.pipeline_name, $json.record.pipeline_stage_id, $json.record.stage_name, $json.record.status, $json.record.monetary_value, $json.record.currency, $json.record.assigned_to_user_id, $json.record.assigned_to_name, JSON.stringify($json.record.custom_fields), $json.record.close_date, $json.record.valid_from, $json.record.valid_to, $json.record.is_current, $json.record.change_reason, $json.record.ghl_created_at, $json.record.ghl_updated_at, $json.record.synced_at ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      }
+    },
+    {
+      "id": "node-10-stage-check",
+      "name": "Hay Cambio de Etapa?",
+      "type": "n8n-nodes-base.if",
+      "position": [2000, 300],
+      "parameters": {
+        "conditions": {
+          "boolean": [{ "value1": "={{ $('Logica SCD2 Oportunidades').first().json.stage_changed }}", "value2": true }]
+        }
+      }
+    },
+    {
+      "id": "node-11-prev-stage",
+      "name": "Buscar Ultimo Cambio de Etapa",
+      "type": "n8n-nodes-base.postgres",
+      "position": [2220, 260],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT changed_at FROM fact_opp_stage_history WHERE opportunity_id = $1 ORDER BY changed_at DESC LIMIT 1",
+        "additionalFields": {
+          "queryParams": "={{ [ $('Sanitizar Oportunidad').first().json.opportunity_id ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      }
+    },
+    {
+      "id": "node-12-history",
+      "name": "INSERT fact_opp_stage_history",
+      "type": "n8n-nodes-base.postgres",
+      "position": [2440, 260],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO fact_opp_stage_history (opportunity_id, contact_id, location_id, from_stage_id, from_stage_name, to_stage_id, to_stage_name, pipeline_id, pipeline_name, monetary_value, status_at_change, assigned_user_id, time_in_prev_stage_sec, changed_at, triggered_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)",
+        "additionalFields": {
+          "queryParams": "={{ (() => {\n  const opp    = $('Sanitizar Oportunidad').first().json;\n  const scd    = $('Logica SCD2 Oportunidades').first().json;\n  const prevRow = $input.first().json;\n  const prevChangedAt = prevRow && prevRow.changed_at ? new Date(prevRow.changed_at).getTime() : null;\n  const changedAt = opp._changed_at ? new Date(opp._changed_at).getTime() : Date.now();\n  const timeInPrev = prevChangedAt ? Math.floor((changedAt - prevChangedAt) / 1000) : null;\n  return [\n    opp.opportunity_id,\n    opp.contact_id,\n    opp.location_id,\n    scd.prev_stage_id || opp._prev_stage_id,\n    scd.prev_stage_name || opp._prev_stage_name,\n    opp.pipeline_stage_id,\n    opp.stage_name,\n    opp.pipeline_id,\n    opp.pipeline_name,\n    opp.monetary_value,\n    opp.status,\n    opp.assigned_to_user_id,\n    timeInPrev,\n    opp._changed_at || new Date().toISOString(),\n    'webhook'\n  ];\n})() }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      }
+    },
+    {
+      "id": "node-13-minor",
+      "name": "UPDATE MINOR dim_opportunities",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1560, 440],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE dim_opportunities SET synced_at = $1, ghl_updated_at = $2, custom_fields = $3 WHERE surrogate_key = $4",
+        "additionalFields": {
+          "queryParams": "={{ [ $json.synced_at, $json.ghl_updated_at, JSON.stringify($json.custom_fields), $json.surrogate_key ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      }
+    },
+    {
+      "id": "node-14-respond",
+      "name": "Responder 200 OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [2660, 300],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"ok\" }",
+        "options": { "responseCode": 200 }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook GHL Oportunidades": {
+      "main": [[{ "node": "Validar HMAC GHL", "type": "main", "index": 0 }]]
+    },
+    "Validar HMAC GHL": {
+      "main": [[{ "node": "Sanitizar Oportunidad", "type": "main", "index": 0 }]]
+    },
+    "Sanitizar Oportunidad": {
+      "main": [[{ "node": "Verificar SCD2 dim_opportunities", "type": "main", "index": 0 }]]
+    },
+    "Verificar SCD2 dim_opportunities": {
+      "main": [[{ "node": "Logica SCD2 Oportunidades", "type": "main", "index": 0 }]]
+    },
+    "Logica SCD2 Oportunidades": {
+      "main": [[{ "node": "Rama por Accion", "type": "main", "index": 0 }]]
+    },
+    "Rama por Accion": {
+      "main": [
+        [{ "node": "INSERT dim_opportunities", "type": "main", "index": 0 }],
+        [{ "node": "SCD2 Cerrar Version Oportunidad", "type": "main", "index": 0 }],
+        [{ "node": "UPDATE MINOR dim_opportunities", "type": "main", "index": 0 }]
+      ]
+    },
+    "SCD2 Cerrar Version Oportunidad": {
+      "main": [[{ "node": "SCD2 INSERT Nueva Version Opp", "type": "main", "index": 0 }]]
+    },
+    "SCD2 INSERT Nueva Version Opp": {
+      "main": [[{ "node": "Hay Cambio de Etapa?", "type": "main", "index": 0 }]]
+    },
+    "INSERT dim_opportunities": {
+      "main": [[{ "node": "Hay Cambio de Etapa?", "type": "main", "index": 0 }]]
+    },
+    "Hay Cambio de Etapa?": {
+      "main": [
+        [{ "node": "Buscar Ultimo Cambio de Etapa", "type": "main", "index": 0 }],
+        [{ "node": "Responder 200 OK", "type": "main", "index": 0 }]
+      ]
+    },
+    "Buscar Ultimo Cambio de Etapa": {
+      "main": [[{ "node": "INSERT fact_opp_stage_history", "type": "main", "index": 0 }]]
+    },
+    "INSERT fact_opp_stage_history": {
+      "main": [[{ "node": "Responder 200 OK", "type": "main", "index": 0 }]]
+    },
+    "UPDATE MINOR dim_opportunities": {
+      "main": [[{ "node": "Responder 200 OK", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": false
+  }
+}

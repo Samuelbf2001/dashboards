@@ -1,0 +1,114 @@
+{
+  "name": "WF-09 Polling Appointments",
+  "nodes": [
+    {
+      "id": "node-01-cron",
+      "name": "Cron cada 4 horas",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [240, 300],
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "hours", "hoursInterval": 4 }]
+        }
+      }
+    },
+    {
+      "id": "node-02-locations",
+      "name": "Expandir Location IDs",
+      "type": "n8n-nodes-base.code",
+      "position": [460, 300],
+      "parameters": {
+        "jsCode": "const ids = String($env.GHL_LOCATION_IDS || '').split(',').map(s => s.trim()).filter(Boolean);\nif (ids.length === 0) throw new Error('GHL_LOCATION_IDS no configurado');\nreturn ids.map(location_id => ({ json: { location_id } }));"
+      }
+    },
+    {
+      "id": "node-03-read-cursor",
+      "name": "Leer Cursor ghl_sync_state",
+      "type": "n8n-nodes-base.postgres",
+      "position": [680, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ghl_sync_state (entity, location_id, last_synced_at, records_synced, updated_at) VALUES ('appointments', $1, NULL, 0, NOW()) ON CONFLICT (entity, location_id) DO NOTHING; SELECT entity, location_id, last_synced_at, last_cursor FROM ghl_sync_state WHERE entity = 'appointments' AND location_id = $1",
+        "additionalFields": {
+          "queryParams": "={{ [$json.location_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      }
+    },
+    {
+      "id": "node-04-fetch",
+      "name": "Fetch GHL API Appointments",
+      "type": "n8n-nodes-base.code",
+      "position": [900, 300],
+      "parameters": {
+        "jsCode": "async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }\n\nconst stateRow    = $input.first().json;\nconst location_id = stateRow.location_id;\nconst lastSynced  = stateRow.last_synced_at;\nconst lastCursor  = stateRow.last_cursor;\nconst apiKey      = $env.GHL_API_KEY;\nif (!apiKey) throw new Error('GHL_API_KEY no configurado');\n\nlet allAppts   = [];\nlet nextCursor = lastCursor || null;\nlet page = 0;\nconst MAX_PAGES = 100;\n\nwhile (page < MAX_PAGES) {\n  const url = new URL('https://services.leadconnectorhq.com/calendars/events');\n  url.searchParams.set('locationId', location_id);\n  url.searchParams.set('limit', '100');\n  if (lastSynced && !nextCursor) url.searchParams.set('startTime', lastSynced);\n  if (nextCursor) url.searchParams.set('startAfter', nextCursor);\n\n  let resp;\n  let retries = 0;\n  while (retries < 5) {\n    try {\n      resp = await fetch(url.toString(), {\n        headers: { 'Authorization': 'Bearer ' + apiKey, 'Version': '2021-04-15' }\n      });\n      if (resp.status === 429) { await sleep(Math.pow(2, retries) * 1000); retries++; continue; }\n      break;\n    } catch (err) {\n      if (retries >= 4) throw err;\n      await sleep(Math.pow(2, retries) * 1000);\n      retries++;\n    }\n  }\n  if (!resp.ok) throw new Error('GHL API error ' + resp.status + ' appointments');\n\n  const data = await resp.json();\n  const appts = data.events || data.appointments || [];\n  allAppts = allAppts.concat(appts);\n  nextCursor = data.meta?.startAfter || null;\n  if (!nextCursor || appts.length === 0) break;\n  page++;\n  await sleep(130);\n}\n\nreturn [{ json: { location_id, appointments: allAppts, next_cursor: nextCursor } }];"
+      }
+    },
+    {
+      "id": "node-05-sanitize",
+      "name": "Sanitizar Batch Citas",
+      "type": "n8n-nodes-base.code",
+      "position": [1120, 300],
+      "parameters": {
+        "jsCode": "const REGEX_GHL_ID      = /^[a-zA-Z0-9_-]{8,50}$/;\nconst REGEX_LOCATION_ID = /^[a-zA-Z0-9]{10,30}$/;\nfunction cleanStr(val, maxLen) { if (!val) return null; const s = String(val).trim().substring(0, maxLen); return s.length > 0 ? s : null; }\nfunction validateGHLId(val) { if (!val) return null; const s = String(val).trim(); return REGEX_GHL_ID.test(s) ? s : null; }\nfunction parseISODate(val) { if (!val) return null; const ts = Date.parse(String(val)); return isNaN(ts) ? null : new Date(ts).toISOString(); }\n\nconst { location_id, appointments, next_cursor } = $input.first().json;\n\nconst cleaned = appointments\n  .filter(a => REGEX_GHL_ID.test(String(a.id || a.appointmentId || '').trim()))\n  .map(a => ({\n    appointment_id:   String(a.id || a.appointmentId).trim(),\n    contact_id:       validateGHLId(a.contactId || a.contact_id),\n    location_id,\n    calendar_id:      validateGHLId(a.calendarId),\n    title:            cleanStr(a.title, 500),\n    status:           cleanStr(a.appointmentStatus || a.status, 30),\n    start_time:       parseISODate(a.startTime),\n    end_time:         parseISODate(a.endTime),\n    assigned_user_id: validateGHLId(a.assignedUserId || a.userId),\n    notes:            a.notes ? String(a.notes).substring(0, 5000) : null,\n    address:          cleanStr(a.address, 500),\n    ghl_created_at:   parseISODate(a.dateAdded  || a.createdAt),\n    ghl_updated_at:   parseISODate(a.dateUpdated || a.updatedAt),\n    synced_at:        new Date().toISOString()\n  })).filter(a => a.contact_id);\n\nreturn [{ json: { location_id, appointments: cleaned, next_cursor, total: cleaned.length } }];"
+      }
+    },
+    {
+      "id": "node-06-upsert",
+      "name": "Upsert Batch ghl_appointments",
+      "type": "n8n-nodes-base.code",
+      "position": [1340, 300],
+      "parameters": {
+        "jsCode": "// Upsert masivo via jsonb_to_recordset para minimizar round-trips a Postgres\nconst { appointments } = $input.first().json;\nreturn $input.all();"
+      }
+    },
+    {
+      "id": "node-07-upsert-pg",
+      "name": "Ejecutar Upsert ghl_appointments",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1560, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.appointments.length > 0 ? 'INSERT INTO ghl_appointments (appointment_id, contact_id, location_id, calendar_id, title, status, start_time, end_time, assigned_user_id, notes, address, ghl_created_at, ghl_updated_at, synced_at) SELECT r.* FROM jsonb_to_recordset($1::jsonb) AS r(appointment_id varchar,contact_id varchar,location_id varchar,calendar_id varchar,title varchar,status varchar,start_time timestamptz,end_time timestamptz,assigned_user_id varchar,notes text,address varchar,ghl_created_at timestamptz,ghl_updated_at timestamptz,synced_at timestamptz) ON CONFLICT (appointment_id) DO UPDATE SET status=EXCLUDED.status, title=EXCLUDED.title, start_time=EXCLUDED.start_time, end_time=EXCLUDED.end_time, assigned_user_id=EXCLUDED.assigned_user_id, notes=EXCLUDED.notes, ghl_updated_at=EXCLUDED.ghl_updated_at, synced_at=EXCLUDED.synced_at' : 'SELECT 1' }}",
+        "additionalFields": {
+          "queryParams": "={{ $json.appointments.length > 0 ? [JSON.stringify($json.appointments)] : [] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      }
+    },
+    {
+      "id": "node-08-cursor",
+      "name": "Actualizar ghl_sync_state",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1780, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE ghl_sync_state SET last_synced_at = NOW(), last_cursor = $1, records_synced = records_synced + $2, last_error = NULL, updated_at = NOW() WHERE entity = 'appointments' AND location_id = $3",
+        "additionalFields": {
+          "queryParams": "={{ [ $json.next_cursor, $json.total, $json.location_id ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      }
+    }
+  ],
+  "connections": {
+    "Cron cada 4 horas": { "main": [[{ "node": "Expandir Location IDs", "type": "main", "index": 0 }]] },
+    "Expandir Location IDs": { "main": [[{ "node": "Leer Cursor ghl_sync_state", "type": "main", "index": 0 }]] },
+    "Leer Cursor ghl_sync_state": { "main": [[{ "node": "Fetch GHL API Appointments", "type": "main", "index": 0 }]] },
+    "Fetch GHL API Appointments": { "main": [[{ "node": "Sanitizar Batch Citas", "type": "main", "index": 0 }]] },
+    "Sanitizar Batch Citas": { "main": [[{ "node": "Upsert Batch ghl_appointments", "type": "main", "index": 0 }]] },
+    "Upsert Batch ghl_appointments": { "main": [[{ "node": "Ejecutar Upsert ghl_appointments", "type": "main", "index": 0 }]] },
+    "Ejecutar Upsert ghl_appointments": { "main": [[{ "node": "Actualizar ghl_sync_state", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": false
+  }
+}

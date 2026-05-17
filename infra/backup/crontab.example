@@ -1,0 +1,19 @@
+# =============================================================================
+# GHL Analytics Platform — Crontab para backup diario de PostgreSQL
+# Agregar al crontab del host o del contenedor postgres con:
+#   crontab -e  (en el host)
+#   docker exec <postgres_container> crontab -e
+# =============================================================================
+
+# Backup diario a las 03:00 AM hora local (UTC-5 = 08:00 UTC)
+# Variables de entorno deben estar disponibles; ajustar la ruta del script.
+0 3 * * * /bin/bash /backups/pg_backup.sh >> /backups/backup.log 2>&1
+
+# =============================================================================
+# Alternativa usando docker exec desde el host (si el cron corre en el host):
+#
+# 0 3 * * * docker exec ghl_postgres \
+#   bash -c 'POSTGRES_DB=$POSTGRES_DB POSTGRES_USER=$POSTGRES_USER \
+#   POSTGRES_PASSWORD=$POSTGRES_PASSWORD \
+#   /bin/sh /backups/pg_backup.sh' >> /var/log/ghl_backup.log 2>&1
+# =============================================================================

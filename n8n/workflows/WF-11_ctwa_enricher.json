@@ -1,0 +1,183 @@
+{
+  "name": "WF-11 CTWA Enricher",
+  "nodes": [
+    {
+      "id": "node-01-cron",
+      "name": "Cron cada 30 min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [240, 300],
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "minutes", "minutesInterval": 30 }]
+        }
+      }
+    },
+    {
+      "id": "node-02-fetch-unmatched",
+      "name": "Buscar CTWA sin Correlacionar",
+      "type": "n8n-nodes-base.postgres",
+      "position": [460, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, ctwa_clid, phone, ad_id, ad_name, campaign_id, campaign_name, conversion_value, clicked_at FROM fact_ctwa_clicks WHERE contact_id IS NULL ORDER BY clicked_at DESC LIMIT 100"
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      }
+    },
+    {
+      "id": "node-03-check-empty",
+      "name": "Hay CTWA sin Correlacionar?",
+      "type": "n8n-nodes-base.if",
+      "position": [680, 300],
+      "parameters": {
+        "conditions": {
+          "number": [{ "value1": "={{ $input.all().length }}", "operation": "larger", "value2": 0 }]
+        }
+      }
+    },
+    {
+      "id": "node-04-match-contact",
+      "name": "Buscar Contacto por Phone",
+      "type": "n8n-nodes-base.postgres",
+      "position": [900, 220],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT contact_id, location_id FROM dim_contacts WHERE phone = $1 AND is_current = TRUE LIMIT 1",
+        "additionalFields": {
+          "queryParams": "={{ [$json.phone] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      }
+    },
+    {
+      "id": "node-05-found-check",
+      "name": "Contacto Encontrado?",
+      "type": "n8n-nodes-base.if",
+      "position": [1120, 220],
+      "parameters": {
+        "conditions": {
+          "string": [{ "value1": "={{ $json.contact_id }}", "operation": "isNotEmpty" }]
+        }
+      }
+    },
+    {
+      "id": "node-06-find-conversation",
+      "name": "Buscar Conversacion del Contacto",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1340, 180],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT conversation_id FROM dim_conversations WHERE contact_id = $1 AND is_current = TRUE ORDER BY ghl_created_at DESC LIMIT 1",
+        "additionalFields": {
+          "queryParams": "={{ [$json.contact_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      }
+    },
+    {
+      "id": "node-07-update-ctwa",
+      "name": "UPDATE fact_ctwa_clicks Correlacion",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1560, 180],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE fact_ctwa_clicks SET contact_id = $1, conversation_id = $2, location_id = $3 WHERE ctwa_clid = $4 AND contact_id IS NULL",
+        "additionalFields": {
+          "queryParams": "={{ [\n  $('Buscar Contacto por Phone').first().json.contact_id,\n  $json.conversation_id || null,\n  $('Buscar Contacto por Phone').first().json.location_id,\n  $('Buscar CTWA sin Correlacionar').first().json.ctwa_clid\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      }
+    },
+    {
+      "id": "node-08-check-opp",
+      "name": "Oportunidad Ganada (Won)?",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1780, 180],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT opportunity_id, monetary_value, currency FROM dim_opportunities WHERE contact_id = $1 AND status = 'won' AND is_current = TRUE AND capi_sent_at IS NULL LIMIT 1",
+        "additionalFields": {
+          "queryParams": "={{ [$('Buscar Contacto por Phone').first().json.contact_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      }
+    },
+    {
+      "id": "node-09-has-opp",
+      "name": "Hay Conversion?",
+      "type": "n8n-nodes-base.if",
+      "position": [2000, 180],
+      "parameters": {
+        "conditions": {
+          "string": [{ "value1": "={{ $json.opportunity_id }}", "operation": "isNotEmpty" }]
+        }
+      }
+    },
+    {
+      "id": "node-10-send-capi",
+      "name": "Enviar Conversion a Meta CAPI",
+      "type": "n8n-nodes-base.code",
+      "position": [2220, 140],
+      "parameters": {
+        "jsCode": "// Enviar conversion event a Meta Conversions API\n// Referencia: n8n/lib/meta_capi.js\nconst crypto = require('crypto');\n\nconst clickRow = $('Buscar CTWA sin Correlacionar').first().json;\nconst oppRow   = $('Oportunidad Ganada (Won)?').first().json;\nconst pixelId  = $env.META_PIXEL_ID;        // Variable adicional requerida\nconst token    = $env.META_CLOUD_API_TOKEN;\n\nif (!pixelId || !token) {\n  // Sin pixel configurado, no enviar CAPI pero no fallar\n  return [{ json: { _capi_skip: true, reason: 'META_PIXEL_ID no configurado' } }];\n}\n\n// Event ID deterministico para deduplicacion\nconst event_id = crypto.createHash('sha256').update(clickRow.ctwa_clid + 'Purchase').digest('hex');\n\n// Hash phone para Meta\nconst hashPhone = clickRow.phone\n  ? crypto.createHash('sha256').update(clickRow.phone.replace(/\\s/g, '')).digest('hex')\n  : null;\n\nconst event_time = Math.floor(Date.now() / 1000);\n\nconst payload = {\n  data: [{\n    event_name:     'Purchase',\n    event_time,\n    event_id,\n    action_source:  'business_messaging',\n    messaging_channel: 'whatsapp',\n    user_data: Object.assign({ ctwa_clid: clickRow.ctwa_clid }, hashPhone ? { ph: [hashPhone] } : {}),\n    custom_data: {\n      value:    oppRow.monetary_value || 0,\n      currency: oppRow.currency || 'COP'\n    }\n  }]\n};\n\nconst url = `https://graph.facebook.com/v18.0/${pixelId}/events?access_token=${encodeURIComponent(token)}`;\n\nlet response;\ntry {\n  const resp = await fetch(url, {\n    method:  'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body:    JSON.stringify(payload)\n  });\n  response = await resp.json();\n  if (!resp.ok) throw new Error('Meta CAPI HTTP ' + resp.status);\n} catch (err) {\n  // Loguear error pero no romper el flujo\n  return [{ json: { _capi_skip: true, reason: err.message } }];\n}\n\nreturn [{ json: {\n  event_id,\n  capi_payload: payload,\n  capi_response: response,\n  opportunity_id: oppRow.opportunity_id,\n  ctwa_clid: clickRow.ctwa_clid\n} }];"
+      }
+    },
+    {
+      "id": "node-11-update-capi",
+      "name": "UPDATE CAPI enviado",
+      "type": "n8n-nodes-base.postgres",
+      "position": [2440, 140],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE fact_ctwa_clicks SET capi_sent_at = NOW(), capi_event_id = $1, capi_payload = $2, converted_to_opp_id = $3, converted_at = NOW() WHERE ctwa_clid = $4",
+        "additionalFields": {
+          "queryParams": "={{ [ $json.event_id, JSON.stringify($json.capi_payload), $json.opportunity_id, $json.ctwa_clid ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      }
+    }
+  ],
+  "connections": {
+    "Cron cada 30 min": { "main": [[{ "node": "Buscar CTWA sin Correlacionar", "type": "main", "index": 0 }]] },
+    "Buscar CTWA sin Correlacionar": { "main": [[{ "node": "Hay CTWA sin Correlacionar?", "type": "main", "index": 0 }]] },
+    "Hay CTWA sin Correlacionar?": {
+      "main": [
+        [{ "node": "Buscar Contacto por Phone", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Buscar Contacto por Phone": { "main": [[{ "node": "Contacto Encontrado?", "type": "main", "index": 0 }]] },
+    "Contacto Encontrado?": {
+      "main": [
+        [{ "node": "Buscar Conversacion del Contacto", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Buscar Conversacion del Contacto": { "main": [[{ "node": "UPDATE fact_ctwa_clicks Correlacion", "type": "main", "index": 0 }]] },
+    "UPDATE fact_ctwa_clicks Correlacion": { "main": [[{ "node": "Oportunidad Ganada (Won)?", "type": "main", "index": 0 }]] },
+    "Oportunidad Ganada (Won)?": { "main": [[{ "node": "Hay Conversion?", "type": "main", "index": 0 }]] },
+    "Hay Conversion?": {
+      "main": [
+        [{ "node": "Enviar Conversion a Meta CAPI", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Enviar Conversion a Meta CAPI": { "main": [[{ "node": "UPDATE CAPI enviado", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": false
+  }
+}

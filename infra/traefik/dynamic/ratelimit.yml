@@ -1,0 +1,49 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Traefik — Middlewares de Rate Limiting
+# Referencia: GHL_Platform.txt sección 5.3
+# Los middlewares de labels en docker-compose.yml cubren los servicios;
+# este archivo define middlewares adicionales reutilizables.
+# ─────────────────────────────────────────────────────────────────────────────
+
+http:
+  middlewares:
+
+    # ─── Webhook GHL → n8n (inbound) ─────────────────────────────────────────
+    # Límite: 500 req / 10s — acción al exceder: HTTP 429 + Retry-After
+    ghl-webhook-rl:
+      rateLimit:
+        average: 500
+        period: 10s
+        burst: 50
+
+    # ─── Webhook Meta CTWA → n8n ──────────────────────────────────────────────
+    # Límite: 200 req / 10s
+    meta-ctwa-rl:
+      rateLimit:
+        average: 200
+        period: 10s
+        burst: 30
+
+    # ─── Metabase UI (por IP) ─────────────────────────────────────────────────
+    # Límite: 120 req / 1 min
+    metabase-ui-rl:
+      rateLimit:
+        average: 120
+        period: 1m
+        burst: 30
+
+    # ─── Metabase API embeds ──────────────────────────────────────────────────
+    # Límite: 300 req / 1 min
+    metabase-api-rl:
+      rateLimit:
+        average: 300
+        period: 1m
+        burst: 50
+
+    # ─── n8n UI ───────────────────────────────────────────────────────────────
+    # Límite: 60 req / 1 min
+    n8n-ui-rl:
+      rateLimit:
+        average: 60
+        period: 1m
+        burst: 20

@@ -1,0 +1,31 @@
+# Secrets — never commit
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Claude Code local data
+.claude/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Logs / runtime
+*.log
+logs/
+tmp/
+backups/
+
+# Docker / volumes locales (si se generan junto al repo)
+volumes/
+data/
+postgres-data/
+n8n-data/
+metabase-data/

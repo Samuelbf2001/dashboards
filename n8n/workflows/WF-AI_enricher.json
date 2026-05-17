@@ -1,0 +1,91 @@
+{
+  "name": "WF-AI Enricher",
+  "nodes": [
+    {
+      "id": "node-01-cron",
+      "name": "Cron cada 15 min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [240, 300],
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "minutes", "minutesInterval": 15 }]
+        }
+      }
+    },
+    {
+      "id": "node-02-fetch-pending",
+      "name": "Fetch Mensajes sin Embedding",
+      "type": "n8n-nodes-base.postgres",
+      "position": [460, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, body, conversation_id, contact_id, location_id FROM fact_messages WHERE embedding IS NULL AND message_type IN ('TEXT','WHATSAPP','SMS','EMAIL') AND body IS NOT NULL AND LENGTH(body) > 10 ORDER BY sent_at DESC LIMIT 50"
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      }
+    },
+    {
+      "id": "node-03-check-empty",
+      "name": "Hay Mensajes Pendientes?",
+      "type": "n8n-nodes-base.if",
+      "position": [680, 300],
+      "parameters": {
+        "conditions": {
+          "number": [{ "value1": "={{ $input.all().length }}", "operation": "larger", "value2": 0 }]
+        }
+      }
+    },
+    {
+      "id": "node-04-call-embeddings",
+      "name": "Llamar API Embeddings",
+      "type": "n8n-nodes-base.code",
+      "position": [900, 220],
+      "parameters": {
+        "jsCode": "// Llamar al endpoint de embeddings configurado via AI_EMBEDDING_URL\n// Si no esta configurado, usar OpenAI ada-002 con OPENAI_API_KEY\n// Referencia: GHL_Database.txt seccion 'Workflow WF-AI-Enricher'\n\nasync function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }\n\nconst messages   = $input.all().map(i => i.json);\nconst embedUrl   = $env.AI_EMBEDDING_URL || 'https://api.openai.com/v1/embeddings';\nconst openaiKey  = $env.OPENAI_API_KEY;\n\nif (!openaiKey && !$env.AI_EMBEDDING_URL) {\n  // Sin clave de IA configurada — saltar silenciosamente\n  return messages.map(m => ({ json: Object.assign({}, m, { _embedding_skip: true }) }));\n}\n\nconst results = [];\n\n// Procesar en batch de 20 para no exceder rate limit\nconst batchSize = 20;\nfor (let i = 0; i < messages.length; i += batchSize) {\n  const batch = messages.slice(i, i + batchSize);\n  const texts  = batch.map(m => String(m.body).substring(0, 8000));\n\n  let resp;\n  let retries = 0;\n  while (retries < 3) {\n    try {\n      const headers = { 'Content-Type': 'application/json' };\n      if (openaiKey) headers['Authorization'] = 'Bearer ' + openaiKey;\n\n      resp = await fetch(embedUrl, {\n        method:  'POST',\n        headers,\n        body:    JSON.stringify({ input: texts, model: 'text-embedding-ada-002' })\n      });\n      if (resp.status === 429) { await sleep(Math.pow(2, retries) * 2000); retries++; continue; }\n      break;\n    } catch (err) {\n      if (retries >= 2) { break; }\n      await sleep(Math.pow(2, retries) * 1000);\n      retries++;\n    }\n  }\n\n  if (!resp || !resp.ok) {\n    // Error en API — marcar como skip para este batch\n    for (const m of batch) results.push({ json: Object.assign({}, m, { _embedding_skip: true }) });\n    continue;\n  }\n\n  const data = await resp.json();\n  const embeddings = (data.data || []).map(e => e.embedding);\n\n  for (let j = 0; j < batch.length; j++) {\n    results.push({\n      json: Object.assign({}, batch[j], { embedding: embeddings[j] || null })\n    });\n  }\n\n  await sleep(200);\n}\n\nreturn results;"
+      }
+    },
+    {
+      "id": "node-05-call-llm",
+      "name": "Llamar LLM para Intent y Sentiment",
+      "type": "n8n-nodes-base.code",
+      "position": [1120, 220],
+      "parameters": {
+        "jsCode": "// Llamar LLM para enriquecer ai_intent y ai_sentiment\n// Endpoint configurable via AI_LLM_URL\n// Si no esta configurado, saltar silenciosamente\n\nconst llmUrl    = $env.AI_LLM_URL;\nconst openaiKey = $env.OPENAI_API_KEY;\n\nif (!llmUrl && !openaiKey) {\n  return $input.all().map(i => ({ json: Object.assign({}, i.json, { _llm_skip: true }) }));\n}\n\nconst endpoint = llmUrl || 'https://api.openai.com/v1/chat/completions';\nconst results  = [];\n\nfor (const item of $input.all()) {\n  const m = item.json;\n  if (m._embedding_skip) { results.push(item); continue; }\n\n  const prompt = `Analiza este mensaje de WhatsApp/SMS de un lead y responde en JSON con exactamente estos campos:\n- intent: una de [purchase_intent, support, information, complaint, appointment_request, pricing_inquiry, other]\n- sentiment: una de [positive, neutral, negative]\n- is_question: true o false\n\nMensaje: \"${String(m.body || '').substring(0, 500)}\"\n\nResponde solo JSON, sin explicacion.`;\n\n  let llmResult = { intent: null, sentiment: null, is_question: null };\n  try {\n    const headers = { 'Content-Type': 'application/json' };\n    if (openaiKey) headers['Authorization'] = 'Bearer ' + openaiKey;\n\n    const resp = await fetch(endpoint, {\n      method:  'POST',\n      headers,\n      body:    JSON.stringify({\n        model:       'gpt-4o-mini',\n        messages:    [{ role: 'user', content: prompt }],\n        temperature: 0,\n        max_tokens:  100\n      })\n    });\n\n    if (resp.ok) {\n      const data = await resp.json();\n      const text = data.choices?.[0]?.message?.content || '{}';\n      try { llmResult = JSON.parse(text.trim()); } catch (e) { /* ignorar parse error */ }\n    }\n  } catch (err) { /* ignorar errores de red */ }\n\n  results.push({\n    json: Object.assign({}, m, {\n      ai_intent:      llmResult.intent     || null,\n      ai_sentiment:   llmResult.sentiment  || null,\n      ai_is_question: llmResult.is_question !== undefined ? Boolean(llmResult.is_question) : null\n    })\n  });\n}\n\nreturn results;"
+      }
+    },
+    {
+      "id": "node-06-update-messages",
+      "name": "UPDATE fact_messages con AI",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1340, 220],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE fact_messages SET embedding = $1::vector, ai_intent = $2, ai_sentiment = $3, ai_is_question = $4 WHERE id = $5",
+        "additionalFields": {
+          "queryParams": "={{ [\n  $json.embedding ? JSON.stringify($json.embedding) : null,\n  $json.ai_intent        || null,\n  $json.ai_sentiment     || null,\n  $json.ai_is_question !== undefined ? $json.ai_is_question : null,\n  $json.id\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      }
+    }
+  ],
+  "connections": {
+    "Cron cada 15 min": { "main": [[{ "node": "Fetch Mensajes sin Embedding", "type": "main", "index": 0 }]] },
+    "Fetch Mensajes sin Embedding": { "main": [[{ "node": "Hay Mensajes Pendientes?", "type": "main", "index": 0 }]] },
+    "Hay Mensajes Pendientes?": {
+      "main": [
+        [{ "node": "Llamar API Embeddings", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Llamar API Embeddings": { "main": [[{ "node": "Llamar LLM para Intent y Sentiment", "type": "main", "index": 0 }]] },
+    "Llamar LLM para Intent y Sentiment": { "main": [[{ "node": "UPDATE fact_messages con AI", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": false
+  }
+}

@@ -1,0 +1,78 @@
+{
+  "name": "WF-06 Meta CTWA Verify Challenge",
+  "nodes": [
+    {
+      "id": "node-01-webhook",
+      "name": "Webhook Meta CTWA GET",
+      "type": "n8n-nodes-base.webhook",
+      "position": [240, 300],
+      "parameters": {
+        "path": "meta/ctwa",
+        "httpMethod": "GET",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "node-02-verify",
+      "name": "Verificar hub.verify_token",
+      "type": "n8n-nodes-base.code",
+      "position": [460, 300],
+      "parameters": {
+        "jsCode": "// Responder al challenge de verificacion de Meta Cloud API (SEC-10)\n// GET /meta/ctwa?hub.mode=subscribe&hub.challenge=<token>&hub.verify_token=<token>\n\nconst query = $input.first().query || {};\n\nconst mode         = query['hub.mode'];\nconst challenge    = query['hub.challenge'];\nconst verifyToken  = query['hub.verify_token'];\n\nconst expectedToken = $env.META_VERIFY_TOKEN;\n\nif (!expectedToken) {\n  throw new Error('META_VERIFY_TOKEN no configurado');\n}\n\nif (mode === 'subscribe' && verifyToken === expectedToken) {\n  // Verificacion exitosa: devolver hub.challenge tal cual\n  return [{ json: { _challenge: challenge, _valid: true } }];\n}\n\n// Token invalido o mode incorrecto\nreturn [{ json: { _challenge: null, _valid: false } }];"
+      }
+    },
+    {
+      "id": "node-03-branch",
+      "name": "Token Valido?",
+      "type": "n8n-nodes-base.if",
+      "position": [680, 300],
+      "parameters": {
+        "conditions": {
+          "boolean": [{ "value1": "={{ $json._valid }}", "value2": true }]
+        }
+      }
+    },
+    {
+      "id": "node-04-respond-ok",
+      "name": "Responder hub.challenge",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [900, 220],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json._challenge }}",
+        "options": { "responseCode": 200 }
+      }
+    },
+    {
+      "id": "node-05-respond-403",
+      "name": "Responder 403 Token Invalido",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [900, 400],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"error\": \"Forbidden\" }",
+        "options": { "responseCode": 403 }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Meta CTWA GET": {
+      "main": [[{ "node": "Verificar hub.verify_token", "type": "main", "index": 0 }]]
+    },
+    "Verificar hub.verify_token": {
+      "main": [[{ "node": "Token Valido?", "type": "main", "index": 0 }]]
+    },
+    "Token Valido?": {
+      "main": [
+        [{ "node": "Responder hub.challenge", "type": "main", "index": 0 }],
+        [{ "node": "Responder 403 Token Invalido", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": false
+  }
+}

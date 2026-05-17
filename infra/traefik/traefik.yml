@@ -1,0 +1,65 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Traefik v3 — Configuración estática
+# Archivo montado en /etc/traefik/traefik.yml dentro del contenedor
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─── API / DASHBOARD ─────────────────────────────────────────────────────────
+api:
+  dashboard: true
+  # Deshabilitar en producción o proteger con middleware auth
+  insecure: false
+
+# ─── LOG ─────────────────────────────────────────────────────────────────────
+log:
+  level: WARN   # DEBUG en desarrollo, WARN/ERROR en producción
+
+accessLog:
+  # Registrar todas las peticiones; útil para auditar rate limits y errores
+  bufferingSize: 100
+
+# ─── ENTRY POINTS ────────────────────────────────────────────────────────────
+entryPoints:
+  # Puerto 80 — HTTP; redirige automáticamente a HTTPS
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+
+  # Puerto 443 — HTTPS con TLS
+  websecure:
+    address: ":443"
+    http:
+      tls:
+        certResolver: letsencrypt
+
+# ─── PROVEEDORES ─────────────────────────────────────────────────────────────
+providers:
+  # Proveedor Docker: detecta servicios por labels en docker-compose.yml
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false   # Solo servicios con traefik.enable=true
+    network: ""               # EasyPanel usa la red bridge por defecto
+
+  # Proveedor File: carga middlewares dinámicos (cors.yml, ratelimit.yml)
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true               # Recarga automática al modificar archivos
+
+# ─── CERT RESOLVER — LET'S ENCRYPT ──────────────────────────────────────────
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      # IMPORTANTE: reemplazar con email real para notificaciones de expiración
+      email: "${LETSENCRYPT_EMAIL}"
+      storage: /certs/acme.json
+      # Desafío HTTP-01: Traefik debe ser accesible en el puerto 80
+      httpChallenge:
+        entryPoint: web
+
+# ─── PING (healthcheck del contenedor Traefik) ───────────────────────────────
+ping:
+  entryPoint: web

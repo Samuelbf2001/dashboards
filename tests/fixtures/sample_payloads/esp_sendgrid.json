@@ -1,0 +1,22 @@
+[
+  {
+    "email": "juan.perez@example.com",
+    "timestamp": 1729001600,
+    "smtp-id": "<20261015143000.abc123@mg.sixteam.pro>",
+    "event": "click",
+    "category": ["transactional", "propuesta"],
+    "sg_event_id": "sendgrid_evt_001",
+    "sg_message_id": "sg_msg_abc123.filterdrecv-xx",
+    "url": "https://sixteam.pro/propuesta?ref=email&contact=contact_sample_001",
+    "url_offset": {
+      "index": 0,
+      "type": "html"
+    },
+    "useragent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)",
+    "ip": "190.85.100.51",
+    "unique_args": {
+      "ghl_location_id": "loc_abc123",
+      "ghl_contact_id": "contact_sample_001"
+    }
+  }
+]

@@ -1,0 +1,103 @@
+{
+  "name": "CTWA - Meta Ads",
+  "description": "Leads por campana CTWA, leads por ad_id, tasa de conversion CTWA a won, revenue atribuido por campana, ROAS (revenue/lifetime_spend de dim_ads) y tiempo desde click hasta primer mensaje.",
+  "parameters": [
+    {
+      "name": "Location",
+      "slug": "location_id",
+      "type": "category",
+      "required": false,
+      "default": null
+    },
+    {
+      "name": "Fecha inicio",
+      "slug": "date_from",
+      "type": "date/single",
+      "required": false
+    },
+    {
+      "name": "Fecha fin",
+      "slug": "date_to",
+      "type": "date/single",
+      "required": false
+    },
+    {
+      "name": "Campaign ID",
+      "slug": "campaign_id",
+      "type": "category",
+      "required": false
+    }
+  ],
+  "cards": [
+    {
+      "name": "Total clicks CTWA",
+      "visualization": "scalar",
+      "query_file": "queries/05_ctwa_total_clicks.sql",
+      "size": { "width": 3, "height": 3 },
+      "filters": ["location_id", "date_from", "date_to"]
+    },
+    {
+      "name": "Leads CTWA correlacionados",
+      "visualization": "scalar",
+      "query_file": "queries/05_ctwa_correlated_leads.sql",
+      "size": { "width": 3, "height": 3 },
+      "filters": ["location_id", "date_from", "date_to"]
+    },
+    {
+      "name": "Revenue atribuido CTWA",
+      "visualization": "scalar",
+      "query_file": "queries/05_ctwa_revenue_attributed.sql",
+      "size": { "width": 3, "height": 3 },
+      "filters": ["location_id", "date_from", "date_to"]
+    },
+    {
+      "name": "ROAS (revenue / gasto)",
+      "visualization": "scalar",
+      "query_file": "queries/05_ctwa_roas.sql",
+      "size": { "width": 3, "height": 3 },
+      "filters": ["location_id", "campaign_id"]
+    },
+    {
+      "name": "Leads por campana CTWA",
+      "visualization": "bar",
+      "query_file": "queries/05_ctwa_leads_by_campaign.sql",
+      "size": { "width": 6, "height": 6 },
+      "filters": ["location_id", "date_from", "date_to"]
+    },
+    {
+      "name": "Leads por ad_id",
+      "visualization": "bar",
+      "query_file": "queries/05_ctwa_leads_by_ad.sql",
+      "size": { "width": 6, "height": 6 },
+      "filters": ["location_id", "date_from", "date_to", "campaign_id"]
+    },
+    {
+      "name": "Tasa de conversion CTWA a won",
+      "visualization": "scalar",
+      "query_file": "queries/05_ctwa_conversion_rate.sql",
+      "size": { "width": 4, "height": 3 },
+      "filters": ["location_id", "date_from", "date_to"]
+    },
+    {
+      "name": "Revenue atribuido por campana",
+      "visualization": "bar",
+      "query_file": "queries/05_ctwa_revenue_by_campaign.sql",
+      "size": { "width": 8, "height": 6 },
+      "filters": ["location_id", "date_from", "date_to"]
+    },
+    {
+      "name": "Tiempo click a primer mensaje (segundos)",
+      "visualization": "scalar",
+      "query_file": "queries/05_ctwa_click_to_message_time.sql",
+      "size": { "width": 4, "height": 3 },
+      "filters": ["location_id", "campaign_id"]
+    },
+    {
+      "name": "Detalle campanas - tabla",
+      "visualization": "table",
+      "query_file": "queries/05_ctwa_campaign_table.sql",
+      "size": { "width": 12, "height": 8 },
+      "filters": ["location_id", "date_from", "date_to"]
+    }
+  ]
+}

@@ -1,0 +1,89 @@
+{
+  "name": "Pipeline",
+  "description": "Funnel de oportunidades por etapa, valor en pipeline, tasa de conversion por fuente, velocity (tiempo promedio en cada etapa) y forecast por close_date.",
+  "parameters": [
+    {
+      "name": "Location",
+      "slug": "location_id",
+      "type": "category",
+      "required": false,
+      "default": null
+    },
+    {
+      "name": "Pipeline",
+      "slug": "pipeline_id",
+      "type": "category",
+      "required": false
+    },
+    {
+      "name": "Fecha inicio",
+      "slug": "date_from",
+      "type": "date/single",
+      "required": false
+    },
+    {
+      "name": "Fecha fin",
+      "slug": "date_to",
+      "type": "date/single",
+      "required": false
+    }
+  ],
+  "cards": [
+    {
+      "name": "Funnel por etapa",
+      "visualization": "funnel",
+      "query_file": "queries/02_pipeline_funnel_by_stage.sql",
+      "size": { "width": 12, "height": 8 },
+      "filters": ["location_id", "pipeline_id", "date_from", "date_to"]
+    },
+    {
+      "name": "Valor total en pipeline",
+      "visualization": "scalar",
+      "query_file": "queries/02_pipeline_total_value.sql",
+      "size": { "width": 4, "height": 3 },
+      "filters": ["location_id", "pipeline_id"]
+    },
+    {
+      "name": "Oportunidades abiertas",
+      "visualization": "scalar",
+      "query_file": "queries/02_pipeline_open_count.sql",
+      "size": { "width": 4, "height": 3 },
+      "filters": ["location_id", "pipeline_id"]
+    },
+    {
+      "name": "Tasa de conversion (won/total)",
+      "visualization": "scalar",
+      "query_file": "queries/02_pipeline_conversion_rate.sql",
+      "size": { "width": 4, "height": 3 },
+      "filters": ["location_id", "pipeline_id", "date_from", "date_to"]
+    },
+    {
+      "name": "Tasa de conversion por fuente",
+      "visualization": "bar",
+      "query_file": "queries/02_pipeline_conversion_by_source.sql",
+      "size": { "width": 6, "height": 6 },
+      "filters": ["location_id", "pipeline_id", "date_from", "date_to"]
+    },
+    {
+      "name": "Velocity - tiempo promedio por etapa (dias)",
+      "visualization": "bar",
+      "query_file": "queries/02_pipeline_velocity_by_stage.sql",
+      "size": { "width": 6, "height": 6 },
+      "filters": ["location_id", "pipeline_id"]
+    },
+    {
+      "name": "Forecast por close_date",
+      "visualization": "bar",
+      "query_file": "queries/02_pipeline_forecast.sql",
+      "size": { "width": 12, "height": 6 },
+      "filters": ["location_id", "pipeline_id"]
+    },
+    {
+      "name": "Oportunidades abiertas por asesor",
+      "visualization": "table",
+      "query_file": "queries/02_pipeline_opps_by_assignee.sql",
+      "size": { "width": 12, "height": 6 },
+      "filters": ["location_id", "pipeline_id"]
+    }
+  ]
+}

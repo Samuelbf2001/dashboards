@@ -1,0 +1,98 @@
+{
+  "name": "WF-05 Meta CTWA Receiver",
+  "nodes": [
+    {
+      "id": "node-01-webhook",
+      "name": "Webhook Meta CTWA POST",
+      "type": "n8n-nodes-base.webhook",
+      "position": [240, 300],
+      "parameters": {
+        "path": "meta/ctwa",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": { "rawBody": true }
+      }
+    },
+    {
+      "id": "node-02-validate-token",
+      "name": "Validar META_VERIFY_TOKEN",
+      "type": "n8n-nodes-base.code",
+      "position": [460, 300],
+      "parameters": {
+        "jsCode": "// Validar que el payload de Meta venga del origen correcto.\n// Meta Cloud API incluye el verify_token en el campo hub.verify_token\n// para la verificacion inicial (GET), pero para eventos POST no hay\n// token de verificacion — se valida con X-Hub-Signature-256 si META_APP_SECRET esta configurado.\n//\n// Para eventos POST: validar firma HMAC si el header esta presente.\nconst crypto = require('crypto');\n\nconst rawBody   = $input.first().binary?.data ? Buffer.from($input.first().binary.data, 'base64').toString('utf8') : JSON.stringify($input.first().json);\nconst sigHeader = $input.first().headers['x-hub-signature-256'] || '';\n\n// Si hay header de firma, validarla con META_CLOUD_API_TOKEN como secret\n// (en produccion deberia ser META_APP_SECRET — mismo concepto)\nif (sigHeader) {\n  const secret = $env.META_CLOUD_API_TOKEN;\n  if (secret) {\n    const receivedHex = sigHeader.startsWith('sha256=') ? sigHeader.slice(7) : sigHeader;\n    let receivedBuf;\n    try { receivedBuf = Buffer.from(receivedHex, 'hex'); } catch (e) { throw new Error('Firma Meta malformada'); }\n    const hmac = crypto.createHmac('sha256', secret);\n    hmac.update(rawBody);\n    const expectedBuf = Buffer.from(hmac.digest('hex'), 'hex');\n    if (receivedBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(receivedBuf, expectedBuf)) {\n      throw new Error('Meta CTWA: X-Hub-Signature-256 invalida');\n    }\n  }\n}\n\nreturn $input.all();"
+      }
+    },
+    {
+      "id": "node-03-extract",
+      "name": "Extraer ctwa_clid y Phone",
+      "type": "n8n-nodes-base.code",
+      "position": [680, 300],
+      "parameters": {
+        "jsCode": "// Extraer objeto referral con ctwa_clid del webhook de Meta Cloud API\n// Estructura tipica del payload de Meta para mensajes de WhatsApp con CTWA:\n// { entry: [{ changes: [{ value: { messages: [{ referral: { ctwa_clid, source_url, source_id, ... }, from: '<phone>' } }] } }] }] }\n\nfunction normalizeE164(raw) {\n  if (!raw) return null;\n  let digits = String(raw).replace(/[^\\d+]/g, '');\n  if (digits.startsWith('+')) {\n    const clean = '+' + digits.slice(1).replace(/\\D/g, '');\n    return (clean.length >= 8 && clean.length <= 16) ? clean : null;\n  }\n  if (/^3\\d{9}$/.test(digits)) return '+57' + digits;\n  if (/^57\\d{10}$/.test(digits)) return '+' + digits;\n  if (digits.length >= 7 && digits.length <= 15) return '+' + digits;\n  return null;\n}\n\nconst payload = $input.first().json;\nconst results = [];\n\nconst entries = Array.isArray(payload.entry) ? payload.entry : [];\n\nfor (const entry of entries) {\n  const changes = Array.isArray(entry.changes) ? entry.changes : [];\n  for (const change of changes) {\n    const value = change.value || {};\n    const messages = Array.isArray(value.messages) ? value.messages : [];\n    for (const msg of messages) {\n      const referral = msg.referral;\n      if (!referral || !referral.ctwa_clid) continue;\n\n      const phone = normalizeE164(msg.from);\n      if (!phone) continue;\n\n      results.push({\n        ctwa_clid:     String(referral.ctwa_clid).substring(0, 500),\n        phone,\n        ad_id:         referral.source_id ? String(referral.source_id).substring(0, 100) : null,\n        ad_name:       referral.headline  ? String(referral.headline).substring(0, 500)  : null,\n        source_url:    referral.source_url ? String(referral.source_url).substring(0, 2048) : null,\n        headline:      referral.headline  ? String(referral.headline).substring(0, 500)  : null,\n        body_text:     referral.body      ? String(referral.body).substring(0, 5000)     : null,\n        clicked_at:    new Date().toISOString()\n      });\n    }\n  }\n}\n\nif (results.length === 0) {\n  // Payload sin CTWA — responder 200 igualmente (Meta reintentar si no responde)\n  return [{ json: { _skip: true } }];\n}\n\nreturn results.map(r => ({ json: r }));"
+      }
+    },
+    {
+      "id": "node-04-branch-skip",
+      "name": "Tiene ctwa_clid?",
+      "type": "n8n-nodes-base.if",
+      "position": [900, 300],
+      "parameters": {
+        "conditions": {
+          "boolean": [{ "value1": "={{ $json._skip === true }}", "value2": false }]
+        }
+      }
+    },
+    {
+      "id": "node-05-insert",
+      "name": "INSERT fact_ctwa_clicks",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1120, 220],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO fact_ctwa_clicks (ctwa_clid, phone, ad_id, ad_name, source_url, headline, body_text, clicked_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (ctwa_clid) DO NOTHING",
+        "additionalFields": {
+          "queryParams": "={{ [ $json.ctwa_clid, $json.phone, $json.ad_id, $json.ad_name, $json.source_url, $json.headline, $json.body_text, $json.clicked_at ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      }
+    },
+    {
+      "id": "node-06-respond",
+      "name": "Responder 200 OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [1340, 300],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"ok\" }",
+        "options": { "responseCode": 200 }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Meta CTWA POST": {
+      "main": [[{ "node": "Validar META_VERIFY_TOKEN", "type": "main", "index": 0 }]]
+    },
+    "Validar META_VERIFY_TOKEN": {
+      "main": [[{ "node": "Extraer ctwa_clid y Phone", "type": "main", "index": 0 }]]
+    },
+    "Extraer ctwa_clid y Phone": {
+      "main": [[{ "node": "Tiene ctwa_clid?", "type": "main", "index": 0 }]]
+    },
+    "Tiene ctwa_clid?": {
+      "main": [
+        [{ "node": "INSERT fact_ctwa_clicks", "type": "main", "index": 0 }],
+        [{ "node": "Responder 200 OK", "type": "main", "index": 0 }]
+      ]
+    },
+    "INSERT fact_ctwa_clicks": {
+      "main": [[{ "node": "Responder 200 OK", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": false
+  }
+}

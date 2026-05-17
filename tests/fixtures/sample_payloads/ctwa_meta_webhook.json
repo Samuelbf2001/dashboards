@@ -1,0 +1,46 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "wa_business_account_001",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "573001000001",
+              "phone_number_id": "wa_phone_id_001"
+            },
+            "messages": [
+              {
+                "from": "573001234567",
+                "id": "wamid.HBgMNTczMDAxMjM0NTY3ABIAEhggREVCMUNBQkZFQjg5N0I5NzNFNzM3RkM2RkFGNDQxMjYA",
+                "timestamp": "1729001234",
+                "type": "text",
+                "text": {
+                  "body": "Hola, vi el anuncio y me gustaria saber mas sobre el producto"
+                },
+                "referral": {
+                  "source_url": "https://fb.me/4c8xABCdef123",
+                  "source_type": "ad",
+                  "source_id": "ad_sample_001",
+                  "headline": "Aumenta tus ventas con CRM",
+                  "body": "Gestiona todos tus leads desde un solo lugar. Prueba gratis 14 dias.",
+                  "media_type": "image",
+                  "image_url": "https://scontent.example.com/v/crm_ad_image.jpg",
+                  "ctwa_clid": "ARAkLgU7CTWA_SAMPLE_CLICK_ID_abcdef1234567890XYZ",
+                  "ads_id": "ad_sample_001",
+                  "adset_id": "adset_sample_001",
+                  "campaign_id": "campaign_remarketing_q4",
+                  "ad_name": "CRM Ventas - Video Testimonios - Remarketing",
+                  "campaign_name": "Remarketing Q4 2026 - Ventas CRM"
+                }
+              }
+            ]
+          },
+          "field": "messages"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,131 @@
+{
+  "name": "WF-08 Polling Opportunities",
+  "nodes": [
+    {
+      "id": "node-01-cron",
+      "name": "Cron cada 60 min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [240, 300],
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "minutes", "minutesInterval": 60 }]
+        }
+      }
+    },
+    {
+      "id": "node-02-locations",
+      "name": "Expandir Location IDs",
+      "type": "n8n-nodes-base.code",
+      "position": [460, 300],
+      "parameters": {
+        "jsCode": "const ids = String($env.GHL_LOCATION_IDS || '').split(',').map(s => s.trim()).filter(Boolean);\nif (ids.length === 0) throw new Error('GHL_LOCATION_IDS no configurado');\nreturn ids.map(location_id => ({ json: { location_id } }));"
+      }
+    },
+    {
+      "id": "node-03-read-cursor",
+      "name": "Leer Cursor ghl_sync_state",
+      "type": "n8n-nodes-base.postgres",
+      "position": [680, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ghl_sync_state (entity, location_id, last_synced_at, records_synced, updated_at) VALUES ('opportunities', $1, NULL, 0, NOW()) ON CONFLICT (entity, location_id) DO NOTHING; SELECT entity, location_id, last_synced_at, last_cursor, records_synced FROM ghl_sync_state WHERE entity = 'opportunities' AND location_id = $1",
+        "additionalFields": {
+          "queryParams": "={{ [$json.location_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      }
+    },
+    {
+      "id": "node-04-fetch",
+      "name": "Fetch GHL API Opportunities",
+      "type": "n8n-nodes-base.code",
+      "position": [900, 300],
+      "parameters": {
+        "jsCode": "// Fetch paginado de oportunidades GHL con rate limiting (80 req/10s)\nasync function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }\n\nconst stateRow    = $input.first().json;\nconst location_id = stateRow.location_id;\nconst lastSynced  = stateRow.last_synced_at;\nconst lastCursor  = stateRow.last_cursor;\nconst apiKey      = $env.GHL_API_KEY;\nif (!apiKey) throw new Error('GHL_API_KEY no configurado');\n\nlet allOpps    = [];\nlet nextCursor = lastCursor || null;\nlet page = 0;\nconst MAX_PAGES = 200;\n\nwhile (page < MAX_PAGES) {\n  const url = new URL('https://services.leadconnectorhq.com/opportunities/search');\n  url.searchParams.set('location_id', location_id);\n  url.searchParams.set('limit', '100');\n  if (lastSynced && !nextCursor) url.searchParams.set('date', lastSynced);\n  if (nextCursor) url.searchParams.set('startAfter', nextCursor);\n\n  let resp;\n  let retries = 0;\n  while (retries < 5) {\n    try {\n      resp = await fetch(url.toString(), {\n        headers: { 'Authorization': 'Bearer ' + apiKey, 'Version': '2021-07-28' }\n      });\n      if (resp.status === 429) {\n        await sleep(Math.pow(2, retries) * 1000);\n        retries++;\n        continue;\n      }\n      break;\n    } catch (err) {\n      if (retries >= 4) throw err;\n      await sleep(Math.pow(2, retries) * 1000);\n      retries++;\n    }\n  }\n  if (!resp.ok) throw new Error('GHL API error ' + resp.status + ' opportunities');\n\n  const data = await resp.json();\n  const opps = data.opportunities || [];\n  allOpps = allOpps.concat(opps);\n  nextCursor = data.meta?.startAfter || null;\n  if (!nextCursor || opps.length === 0) break;\n  page++;\n  await sleep(130);\n}\n\nreturn [{ json: { location_id, opportunities: allOpps, next_cursor: nextCursor } }];"
+      }
+    },
+    {
+      "id": "node-05-sanitize",
+      "name": "Sanitizar Batch Oportunidades",
+      "type": "n8n-nodes-base.code",
+      "position": [1120, 300],
+      "parameters": {
+        "jsCode": "const REGEX_GHL_ID      = /^[a-zA-Z0-9_-]{8,50}$/;\nconst REGEX_LOCATION_ID = /^[a-zA-Z0-9]{10,30}$/;\nfunction cleanStr(val, maxLen) { if (!val) return null; const s = String(val).trim().substring(0, maxLen); return s.length > 0 ? s : null; }\nfunction validateGHLId(val) { if (!val) return null; const s = String(val).trim(); return REGEX_GHL_ID.test(s) ? s : null; }\nfunction parseISODate(val) { if (!val) return null; const ts = Date.parse(String(val)); return isNaN(ts) ? null : new Date(ts).toISOString(); }\nfunction parseFloatSafe(val) { if (val === null || val === undefined || val === '') return null; const n = parseFloat(val); return isNaN(n) ? null : n; }\n\nconst { location_id, opportunities, next_cursor } = $input.first().json;\nconst validStatuses = ['open', 'won', 'lost', 'abandoned'];\n\nconst cleaned = opportunities\n  .filter(o => REGEX_GHL_ID.test(String(o.id || '').trim()) && REGEX_LOCATION_ID.test(String(o.locationId || '').trim()))\n  .map(o => ({\n    opportunity_id:      String(o.id).trim(),\n    contact_id:          validateGHLId(o.contactId),\n    location_id:         String(o.locationId).trim(),\n    pipeline_id:         validateGHLId(o.pipelineId),\n    pipeline_name:       cleanStr(o.pipelineName, 200),\n    pipeline_stage_id:   validateGHLId(o.pipelineStageId),\n    stage_name:          cleanStr(o.stageName, 200),\n    status:              validStatuses.includes(cleanStr(o.status, 20)) ? cleanStr(o.status, 20) : null,\n    monetary_value:      parseFloatSafe(o.monetaryValue) ?? 0,\n    currency:            cleanStr(o.currency, 3) || 'COP',\n    assigned_to_user_id: validateGHLId(o.assignedTo),\n    assigned_to_name:    cleanStr(o.assignedToName, 200),\n    custom_fields:       (o.customFields && typeof o.customFields === 'object') ? o.customFields : null,\n    close_date:          parseISODate(o.closeDate),\n    ghl_created_at:      parseISODate(o.dateAdded  || o.createdAt),\n    ghl_updated_at:      parseISODate(o.dateUpdated || o.updatedAt),\n    synced_at:           new Date().toISOString()\n  })).filter(o => o.contact_id);\n\nreturn [{ json: { location_id, opportunities: cleaned, next_cursor, total: cleaned.length } }];"
+      }
+    },
+    {
+      "id": "node-06-fetch-existing",
+      "name": "Fetch Versiones Actuales Opps",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1340, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT surrogate_key, opportunity_id, pipeline_stage_id, status, monetary_value, assigned_to_user_id, pipeline_id FROM dim_opportunities WHERE opportunity_id = ANY($1::varchar[]) AND is_current = TRUE",
+        "additionalFields": {
+          "queryParams": "={{ [$json.opportunities.map(o => o.opportunity_id)] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      }
+    },
+    {
+      "id": "node-07-apply-scd2",
+      "name": "Aplicar SCD2 Oportunidades",
+      "type": "n8n-nodes-base.code",
+      "position": [1560, 300],
+      "parameters": {
+        "jsCode": "const TRACKED = ['pipeline_stage_id', 'status', 'monetary_value', 'assigned_to_user_id', 'pipeline_id'];\nconst state    = $('Sanitizar Batch Oportunidades').first().json;\nconst existing = $input.first().json;\nconst now      = new Date().toISOString();\n\nconst rows = Array.isArray(existing) ? existing : (existing.data || [existing]);\nconst existingMap = {};\nfor (const row of rows) { if (row && row.opportunity_id) existingMap[row.opportunity_id] = row; }\n\nconst inserts      = [];\nconst scdUpdates   = [];\nconst minorUpdates = [];\n\nfor (const inc of state.opportunities) {\n  const prev = existingMap[inc.opportunity_id];\n  if (!prev) {\n    inserts.push(Object.assign({}, inc, { valid_from: now, valid_to: null, is_current: true, change_reason: 'initial_insert' }));\n    continue;\n  }\n  const changed = TRACKED.filter(f => String(prev[f] ?? null) !== String(inc[f] ?? null));\n  if (changed.length > 0) {\n    scdUpdates.push({ close_surrogate: prev.surrogate_key, close_valid_to: now, record: Object.assign({}, inc, { valid_from: now, valid_to: null, is_current: true, change_reason: changed.map(f => f + '_change').join(', ') }) });\n  } else {\n    minorUpdates.push({ surrogate_key: prev.surrogate_key, synced_at: now, ghl_updated_at: inc.ghl_updated_at || now, custom_fields: inc.custom_fields });\n  }\n}\n// NOTA: fact_opp_stage_history NO se escribe en polling — solo en WF-02 (webhook)\nreturn [{ json: { inserts, scdUpdates, minorUpdates, location_id: state.location_id, next_cursor: state.next_cursor, total: state.total } }];"
+      }
+    },
+    {
+      "id": "node-08-exec-inserts",
+      "name": "Ejecutar INSERTs Opps",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1780, 220],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.inserts.length > 0 ? 'INSERT INTO dim_opportunities (opportunity_id, contact_id, location_id, pipeline_id, pipeline_name, pipeline_stage_id, stage_name, status, monetary_value, currency, assigned_to_user_id, assigned_to_name, custom_fields, close_date, valid_from, valid_to, is_current, change_reason, ghl_created_at, ghl_updated_at, synced_at) SELECT r.* FROM jsonb_to_recordset($1::jsonb) AS r(opportunity_id varchar,contact_id varchar,location_id varchar,pipeline_id varchar,pipeline_name varchar,pipeline_stage_id varchar,stage_name varchar,status varchar,monetary_value numeric,currency varchar,assigned_to_user_id varchar,assigned_to_name varchar,custom_fields jsonb,close_date date,valid_from timestamptz,valid_to timestamptz,is_current boolean,change_reason varchar,ghl_created_at timestamptz,ghl_updated_at timestamptz,synced_at timestamptz) ON CONFLICT DO NOTHING' : 'SELECT 1' }}",
+        "additionalFields": {
+          "queryParams": "={{ $json.inserts.length > 0 ? [JSON.stringify($json.inserts)] : [] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      }
+    },
+    {
+      "id": "node-09-update-cursor",
+      "name": "Actualizar ghl_sync_state",
+      "type": "n8n-nodes-base.postgres",
+      "position": [2000, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE ghl_sync_state SET last_synced_at = NOW(), last_cursor = $1, records_synced = records_synced + $2, last_error = NULL, updated_at = NOW() WHERE entity = 'opportunities' AND location_id = $3",
+        "additionalFields": {
+          "queryParams": "={{ [ $json.next_cursor, $json.total, $json.location_id ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      }
+    }
+  ],
+  "connections": {
+    "Cron cada 60 min": { "main": [[{ "node": "Expandir Location IDs", "type": "main", "index": 0 }]] },
+    "Expandir Location IDs": { "main": [[{ "node": "Leer Cursor ghl_sync_state", "type": "main", "index": 0 }]] },
+    "Leer Cursor ghl_sync_state": { "main": [[{ "node": "Fetch GHL API Opportunities", "type": "main", "index": 0 }]] },
+    "Fetch GHL API Opportunities": { "main": [[{ "node": "Sanitizar Batch Oportunidades", "type": "main", "index": 0 }]] },
+    "Sanitizar Batch Oportunidades": { "main": [[{ "node": "Fetch Versiones Actuales Opps", "type": "main", "index": 0 }]] },
+    "Fetch Versiones Actuales Opps": { "main": [[{ "node": "Aplicar SCD2 Oportunidades", "type": "main", "index": 0 }]] },
+    "Aplicar SCD2 Oportunidades": { "main": [[{ "node": "Ejecutar INSERTs Opps", "type": "main", "index": 0 }]] },
+    "Ejecutar INSERTs Opps": { "main": [[{ "node": "Actualizar ghl_sync_state", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": false
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "type": "ConversationUpdate",
+  "locationId": "loc_abc123",
+  "id": "conv_sample_001",
+  "contactId": "contact_sample_001",
+  "type_channel": "WHATSAPP",
+  "inboxId": "inbox_whatsapp_001",
+  "inboxName": "WhatsApp Empresarial",
+  "assignedTo": "user_asesor_001",
+  "assignedToName": "Maria Lopez",
+  "status": "open",
+  "unreadCount": 2,
+  "lastMessageAt": "2026-10-15T17:00:00.000Z",
+  "dateAdded": "2026-10-15T14:35:00.000Z",
+  "dateUpdated": "2026-10-15T17:00:00.000Z"
+}

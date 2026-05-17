@@ -1,0 +1,24 @@
+{
+  "event": "opened",
+  "id": "mailgun_evt_001_abc",
+  "timestamp": 1729001500,
+  "token": "mailgun_token_abc123",
+  "signature": "mailgun_signature_xyz789",
+  "recipient": "juan.perez@example.com",
+  "domain": "mg.sixteam.pro",
+  "message-headers": [
+    ["X-GHL-Location-Id", "loc_abc123"],
+    ["X-GHL-Contact-Id", "contact_sample_001"],
+    ["Message-Id", "<20261015143000.abc123@mg.sixteam.pro>"]
+  ],
+  "subject": "Tu propuesta personalizada de CRM - Sixteam",
+  "Message-Id": "20261015143000.abc123@mg.sixteam.pro",
+  "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+  "ip": "190.85.100.50",
+  "client-type": "browser",
+  "client-name": "Chrome",
+  "device-type": "desktop",
+  "client-os": "Windows",
+  "country": "CO",
+  "city": "Bogota"
+}

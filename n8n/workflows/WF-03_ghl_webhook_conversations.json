@@ -1,0 +1,167 @@
+{
+  "name": "WF-03 GHL Webhook Conversations",
+  "nodes": [
+    {
+      "id": "node-01-webhook",
+      "name": "Webhook GHL Conversaciones",
+      "type": "n8n-nodes-base.webhook",
+      "position": [240, 300],
+      "parameters": {
+        "path": "ghl/conversations",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": { "rawBody": true }
+      }
+    },
+    {
+      "id": "node-02-hmac",
+      "name": "Validar HMAC GHL",
+      "type": "n8n-nodes-base.code",
+      "position": [460, 300],
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst rawBody   = $input.first().binary?.data ? Buffer.from($input.first().binary.data, 'base64').toString('utf8') : JSON.stringify($input.first().json);\nconst sigHeader = $input.first().headers['x-ghl-signature'] || '';\nconst secret    = $env.WEBHOOK_SECRET;\nif (!secret) throw new Error('WEBHOOK_SECRET no configurado');\nif (!sigHeader) throw new Error('HMAC: header X-GHL-Signature ausente');\nconst receivedHex = sigHeader.startsWith('sha256=') ? sigHeader.slice(7) : sigHeader;\nconst receivedBuf = Buffer.from(receivedHex, 'hex');\nconst hmac = crypto.createHmac('sha256', secret);\nhmac.update(rawBody);\nconst expectedBuf = Buffer.from(hmac.digest('hex'), 'hex');\nif (receivedBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(receivedBuf, expectedBuf)) {\n  throw new Error('HMAC: firma invalida');\n}\nreturn $input.all();"
+      }
+    },
+    {
+      "id": "node-03-sanitize-conv",
+      "name": "Sanitizar Conversacion",
+      "type": "n8n-nodes-base.code",
+      "position": [680, 300],
+      "parameters": {
+        "jsCode": "const REGEX_GHL_ID      = /^[a-zA-Z0-9_-]{8,50}$/;\nconst REGEX_LOCATION_ID = /^[a-zA-Z0-9]{10,30}$/;\n\nfunction cleanStr(val, maxLen) {\n  if (val === null || val === undefined) return null;\n  const s = String(val).trim().substring(0, maxLen);\n  return s.length > 0 ? s : null;\n}\nfunction validateGHLId(val) {\n  if (!val) return null;\n  const s = String(val).trim();\n  return REGEX_GHL_ID.test(s) ? s : null;\n}\nfunction parseISODate(val) {\n  if (!val) return null;\n  const ts = Date.parse(String(val));\n  return isNaN(ts) ? null : new Date(ts).toISOString();\n}\nfunction parseIntSafe(val) {\n  if (val === null || val === undefined || val === '') return null;\n  const n = parseInt(val, 10);\n  return isNaN(n) ? null : n;\n}\n\nconst raw  = $input.first().json;\nconst body = raw.body || raw;\n\nconst conversation_id = validateGHLId(body.id || body.conversationId);\nconst contact_id      = validateGHLId(body.contactId || body.contact_id);\nconst location_id     = REGEX_LOCATION_ID.test(String(body.locationId || '').trim()) ? String(body.locationId).trim() : null;\n\nif (!conversation_id) throw new Error('conversation_id invalido');\nif (!contact_id)      throw new Error('contact_id invalido');\nif (!location_id)     throw new Error('location_id invalido');\n\nconst conv = {\n  conversation_id,\n  contact_id,\n  location_id,\n  channel_type:        cleanStr(body.type || body.channelType || body.channel_type, 30),\n  inbox_id:            validateGHLId(body.inboxId),\n  inbox_name:          cleanStr(body.inboxName, 200),\n  assigned_user_id:    validateGHLId(body.userId || body.assignedUserId),\n  assigned_user_name:  cleanStr(body.userName || body.assignedUserName, 200),\n  status:              cleanStr(body.status, 20),\n  unread_count:        parseIntSafe(body.unreadCount) || 0,\n  last_message_at:     parseISODate(body.lastMessageDate || body.lastMessageAt),\n  ghl_created_at:      parseISODate(body.dateAdded || body.createdAt),\n  synced_at:           new Date().toISOString()\n};\n\n// Mensajes adjuntos al evento (si los hay)\nconst messages = Array.isArray(body.messages) ? body.messages : [];\n\nreturn [{ json: { conv, messages, rawMessage: body.lastMessage || null } }];"
+      }
+    },
+    {
+      "id": "node-04-upsert-conv",
+      "name": "Upsert dim_conversations",
+      "type": "n8n-nodes-base.postgres",
+      "position": [900, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO dim_conversations (conversation_id, contact_id, location_id, channel_type, inbox_id, inbox_name, assigned_user_id, assigned_user_name, status, unread_count, last_message_at, valid_from, is_current, ghl_created_at, synced_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW(),TRUE,$12,$13) ON CONFLICT DO NOTHING",
+        "additionalFields": {
+          "queryParams": "={{ [ $json.conv.conversation_id, $json.conv.contact_id, $json.conv.location_id, $json.conv.channel_type, $json.conv.inbox_id, $json.conv.inbox_name, $json.conv.assigned_user_id, $json.conv.assigned_user_name, $json.conv.status, $json.conv.unread_count, $json.conv.last_message_at, $json.conv.ghl_created_at, $json.conv.synced_at ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      }
+    },
+    {
+      "id": "node-05-update-conv",
+      "name": "Update dim_conversations Estado",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1120, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE dim_conversations SET status = $1, unread_count = $2, last_message_at = $3, assigned_user_id = $4, assigned_user_name = $5, synced_at = $6 WHERE conversation_id = $7 AND is_current = TRUE",
+        "additionalFields": {
+          "queryParams": "={{ [ $json.conv.status, $json.conv.unread_count, $json.conv.last_message_at, $json.conv.assigned_user_id, $json.conv.assigned_user_name, $json.conv.synced_at, $json.conv.conversation_id ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      }
+    },
+    {
+      "id": "node-06-has-message",
+      "name": "Hay Mensaje Nuevo?",
+      "type": "n8n-nodes-base.if",
+      "position": [1340, 300],
+      "parameters": {
+        "conditions": {
+          "string": [{ "value1": "={{ $('Sanitizar Conversacion').first().json.rawMessage ? 'si' : 'no' }}", "operation": "equal", "value2": "si" }]
+        }
+      }
+    },
+    {
+      "id": "node-07-sanitize-msg",
+      "name": "Sanitizar Mensaje",
+      "type": "n8n-nodes-base.code",
+      "position": [1560, 220],
+      "parameters": {
+        "jsCode": "const REGEX_GHL_ID      = /^[a-zA-Z0-9_-]{8,50}$/;\nconst REGEX_LOCATION_ID = /^[a-zA-Z0-9]{10,30}$/;\nconst REGEX_EMAIL       = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$/;\n\nfunction cleanStr(val, maxLen) {\n  if (!val) return null;\n  const s = String(val).trim().substring(0, maxLen);\n  return s.length > 0 ? s : null;\n}\nfunction validateGHLId(val) {\n  if (!val) return null;\n  const s = String(val).trim();\n  return REGEX_GHL_ID.test(s) ? s : null;\n}\nfunction validateEmail(val) {\n  if (!val) return null;\n  const n = String(val).toLowerCase().trim().substring(0, 255);\n  return REGEX_EMAIL.test(n) ? n : null;\n}\nfunction parseISODate(val) {\n  if (!val) return null;\n  const ts = Date.parse(String(val));\n  return isNaN(ts) ? null : new Date(ts).toISOString();\n}\n\nconst data  = $('Sanitizar Conversacion').first().json;\nconst msg   = data.rawMessage || {};\nconst conv  = data.conv;\n\nconst message_id = validateGHLId(msg.id || msg.messageId);\nif (!message_id) throw new Error('message_id invalido en el mensaje adjunto');\n\nconst direction = String(msg.direction || msg.messageDirection || '').toLowerCase();\nif (!['inbound', 'outbound'].includes(direction)) {\n  throw new Error('direction invalido: ' + direction);\n}\n\nreturn [{ json: {\n  message_id,\n  conversation_id: conv.conversation_id,\n  contact_id:      conv.contact_id,\n  location_id:     conv.location_id,\n  message_type:    cleanStr(msg.messageType || msg.type, 30),\n  direction,\n  body:            msg.body ? String(msg.body).substring(0, 65535) : null,\n  subject:         cleanStr(msg.subject, 500),\n  from_email:      validateEmail(msg.from || msg.fromEmail),\n  to_email:        validateEmail(msg.to   || msg.toEmail),\n  email_message_id: cleanStr(msg.emailMessageId, 200),\n  wa_message_id:   cleanStr(msg.waMessageId, 200),\n  wa_status:       cleanStr(msg.waStatus, 20),\n  user_id:         validateGHLId(msg.userId),\n  user_name:       cleanStr(msg.userName, 200),\n  sent_at:         parseISODate(msg.dateAdded || msg.createdAt) || new Date().toISOString()\n} }];"
+      }
+    },
+    {
+      "id": "node-08-insert-msg",
+      "name": "INSERT fact_messages",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1780, 220],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO fact_messages (message_id, conversation_id, contact_id, location_id, message_type, direction, body, subject, from_email, to_email, email_message_id, wa_message_id, wa_status, user_id, user_name, sent_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) ON CONFLICT (message_id) DO NOTHING",
+        "additionalFields": {
+          "queryParams": "={{ [ $json.message_id, $json.conversation_id, $json.contact_id, $json.location_id, $json.message_type, $json.direction, $json.body, $json.subject, $json.from_email, $json.to_email, $json.email_message_id, $json.wa_message_id, $json.wa_status, $json.user_id, $json.user_name, $json.sent_at ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      }
+    },
+    {
+      "id": "node-09-first-reply",
+      "name": "Recalcular first_reply_seconds",
+      "type": "n8n-nodes-base.postgres",
+      "position": [2000, 220],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE dim_conversations SET first_outbound_at = CASE WHEN first_outbound_at IS NULL AND $1 = 'outbound' THEN $2::timestamptz ELSE first_outbound_at END, first_inbound_at = CASE WHEN first_inbound_at IS NULL AND $1 = 'inbound' THEN $2::timestamptz ELSE first_inbound_at END, first_reply_seconds = CASE WHEN first_inbound_at IS NOT NULL AND (CASE WHEN first_outbound_at IS NULL AND $1 = 'outbound' THEN $2::timestamptz ELSE first_outbound_at END) IS NOT NULL THEN EXTRACT(EPOCH FROM ((CASE WHEN first_outbound_at IS NULL AND $1 = 'outbound' THEN $2::timestamptz ELSE first_outbound_at END) - first_inbound_at))::BIGINT ELSE first_reply_seconds END WHERE conversation_id = $3 AND is_current = TRUE",
+        "additionalFields": {
+          "queryParams": "={{ [ $json.direction, $json.sent_at, $json.conversation_id ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      }
+    },
+    {
+      "id": "node-10-respond",
+      "name": "Responder 200 OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [2220, 300],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"ok\" }",
+        "options": { "responseCode": 200 }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook GHL Conversaciones": {
+      "main": [[{ "node": "Validar HMAC GHL", "type": "main", "index": 0 }]]
+    },
+    "Validar HMAC GHL": {
+      "main": [[{ "node": "Sanitizar Conversacion", "type": "main", "index": 0 }]]
+    },
+    "Sanitizar Conversacion": {
+      "main": [[{ "node": "Upsert dim_conversations", "type": "main", "index": 0 }]]
+    },
+    "Upsert dim_conversations": {
+      "main": [[{ "node": "Update dim_conversations Estado", "type": "main", "index": 0 }]]
+    },
+    "Update dim_conversations Estado": {
+      "main": [[{ "node": "Hay Mensaje Nuevo?", "type": "main", "index": 0 }]]
+    },
+    "Hay Mensaje Nuevo?": {
+      "main": [
+        [{ "node": "Sanitizar Mensaje", "type": "main", "index": 0 }],
+        [{ "node": "Responder 200 OK", "type": "main", "index": 0 }]
+      ]
+    },
+    "Sanitizar Mensaje": {
+      "main": [[{ "node": "INSERT fact_messages", "type": "main", "index": 0 }]]
+    },
+    "INSERT fact_messages": {
+      "main": [[{ "node": "Recalcular first_reply_seconds", "type": "main", "index": 0 }]]
+    },
+    "Recalcular first_reply_seconds": {
+      "main": [[{ "node": "Responder 200 OK", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": false
+  }
+}

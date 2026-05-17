@@ -1,0 +1,24 @@
+{
+  "type": "OpportunityUpdate",
+  "locationId": "loc_abc123",
+  "id": "opp_sample_001",
+  "contactId": "contact_sample_001",
+  "pipelineId": "pipeline_ventas_001",
+  "pipelineName": "Pipeline Ventas Principal",
+  "pipelineStageId": "stage_propuesta",
+  "stageName": "Propuesta enviada",
+  "previousStageId": "stage_calificado",
+  "previousStageName": "Lead calificado",
+  "status": "open",
+  "monetaryValue": 3500000,
+  "currency": "COP",
+  "assignedTo": "user_asesor_001",
+  "assignedToName": "Maria Lopez",
+  "closeDate": "2026-11-30",
+  "customFields": {
+    "tipo_contrato": "anual",
+    "numero_usuarios": 5
+  },
+  "dateAdded": "2026-10-01T09:00:00.000Z",
+  "dateUpdated": "2026-10-15T16:45:00.000Z"
+}
