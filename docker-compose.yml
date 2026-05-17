@@ -19,8 +19,8 @@ services:
       - "443:443"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
-      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - ./infra/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./infra/traefik/dynamic:/etc/traefik/dynamic:ro
       - traefik_certs:/certs
     healthcheck:
       test: ["CMD", "traefik", "healthcheck", "--ping"]
@@ -55,7 +55,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       # Scripts SQL se ejecutan en orden alfabético al primer arranque
-      - ../db/init:/docker-entrypoint-initdb.d:ro
+      - ./db/init:/docker-entrypoint-initdb.d:ro
       - postgres_backups:/backups
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
