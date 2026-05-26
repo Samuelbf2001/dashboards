@@ -1,0 +1,1038 @@
+[
+  {
+    "id": "3EOqSyw0F47ly2BB",
+    "name": "evolucione",
+    "active": true,
+    "nodes": [
+      {
+        "id": "36e19311-ba6d-41a9-bdd1-3c743b6ae2ae",
+        "name": "HTTP Request",
+        "type": "n8n-nodes-base.httpRequest",
+        "position": [
+          1392,
+          208
+        ],
+        "parameters": {
+          "url": "http://gotenberg1:3000/forms/chromium/convert/html",
+          "method": "POST",
+          "options": {},
+          "sendBody": true,
+          "contentType": "multipart-form-data",
+          "bodyParameters": {
+            "parameters": [
+              {
+                "name": "data",
+                "parameterType": "formBinaryData",
+                "inputDataFieldName": "data"
+              }
+            ]
+          }
+        },
+        "typeVersion": 4.2
+      },
+      {
+        "id": "9a9c31b1-1611-464c-984d-20814436b4f8",
+        "name": "Code",
+        "type": "n8n-nodes-base.code",
+        "position": [
+          1168,
+          208
+        ],
+        "parameters": {
+          "jsCode": "// Toma todos los items de entrada\nconst items = $input.all();\n\nfunction get(obj, path) {\n  return String(path).split('.').reduce((o, k) => (o && o[k] != null ? o[k] : ''), obj);\n}\n\nfor (const item of items) {\n  const ctx = item.json || {};\n  const tpl = ctx.plantilla_html;\n\n  if (typeof tpl !== 'string') {\n    // Mensaje claro si falta la plantilla\n    throw new Error(\"Falta 'plantilla_html' en item.json (debe ser String con el HTML de la plantilla).\");\n  }\n\n  // Render {{variable}} o {{obj.campo}}\n  const html = tpl.replace(/{{\\s*([\\w.]+)\\s*}}/g, (_, key) => {\n    const val = get(ctx, key);\n    return val == null ? '' : String(val);\n  });\n\n  // Crear binario para HTTP Request (Gotenberg)\n  item.binary = item.binary || {};\n  item.binary.data = {\n    data: Buffer.from(html, 'utf8'),\n    fileName: 'index.html',\n    mimeType: 'text/html',\n  };\n}\n\nreturn items;\n"
+        },
+        "typeVersion": 2
+      },
+      {
+        "id": "99cc9485-3c85-4ac5-83ca-881872037f53",
+        "name": "Respond to Webhook",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "position": [
+          1616,
+          208
+        ],
+        "parameters": {
+          "options": {},
+          "respondWith": "binary"
+        },
+        "typeVersion": 1.4
+      },
+      {
+        "id": "e5fe3006-2e8c-4d95-98ae-f97a24f77cde",
+        "name": "Edit Fields1",
+        "type": "n8n-nodes-base.set",
+        "position": [
+          944,
+          208
+        ],
+        "parameters": {
+          "options": {},
+          "assignments": {
+            "assignments": [
+              {
+                "id": "dcc12350-4f42-4024-8e43-2d0dbb39c398",
+                "name": "plantilla_html",
+                "type": "string",
+                "value": "=<!DOCTYPE html>\n<html lang=\"es\">\n<head>\n  <meta charset=\"UTF-8\" />\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"/>\n  <title>Comprobante de pago - Evolucione</title>\n  <style>\n    body{margin:0;padding:0;background:#f2f6fb;font-family:Arial,Helvetica,sans-serif}\n    img{display:block;border:0;outline:0;text-decoration:none;max-width:100%}\n    table{border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt}\n    .main{max-width:550px;margin:0 auto}\n  </style>\n</head>\n<body>\n  <center role=\"article\" aria-roledescription=\"email\" style=\"width:100%;background:#f2f6fb;\">\n    <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" class=\"main\">\n\n      <!-- Banner superior -->\n      <tr>\n        <td>\n          <img src=\"https://49611461.fs1.hubspotusercontent-na1.net/hubfs/49611461/Evo_ReciboPago_02.png\"\n               alt=\"Evolucione\"\n               style=\"width:100%;height:auto;border-top-left-radius:14px;border-top-right-radius:14px;\">\n        </td>\n      </tr>\n\n      <!-- Intro -->\n      <tr>\n        <td style=\"background:#ffffff;padding:18px 18px 10px;text-align:center;\">\n          <p style=\"margin:0 0 5px;font-size:21px;line-height:1.3;color:#0b6ea9;font-weight:700;\">\n            Hola {{ $json.nombre }}, ¡Gracias por tu pago!\n          </p>\n          <p style=\"margin:0 0 8px;font-size:15px;color:#5f6f7f;\">\n            A continuación te compartimos los detalles:\n          </p>\n        </td>\n      </tr>\n\n      <!-- Tarjeta: contenedor azul con tarjeta blanca -->\n      <tr>\n        <td style=\"background:#ffffff;padding:0 18px;\">\n          <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\"\n                 style=\"background:#eaf3ff;border-radius:16px;\">\n            <tr>\n              <td style=\"padding:9px;\">\n                <table role=\"presentation\" width=\"100%\" cellpadding=\"6\" cellspacing=\"0\" border=\"0\"\n                       style=\"background:#ffffff;border-radius:16px;\">\n                  <tr>\n                    <td style=\"padding:12px 16px;font-size:15px;color:#657a91;background:#ffffff;\">\n                      Folio de la cuota:\n                    </td>\n                    <td align=\"right\" style=\"padding:12px 16px;font-size:15px;color:#2f4560;background:#ffffff;\">\n                      {{ $json['folio de cuota'] }}\n                    </td>\n                  </tr>\n                  <tr>\n                    <td style=\"padding:12px 16px;font-size:15px;color:#657a91;background:#e8f1fb;\">\n                      Nombre completo:\n                    </td>\n                    <td align=\"right\" style=\"padding:12px 16px;font-size:15px;color:#2f4560;background:#e8f1fb;\">\n                      {{ $json.nombre }}\n                    </td>\n                  </tr>\n                  <tr>\n                    <td style=\"padding:12px 16px;font-size:15px;color:#657a91;background:#ffffff;\">\n                      Matrícula:\n                    </td>\n                    <td align=\"right\" style=\"padding:12px 16px;font-size:15px;color:#2f4560;background:#ffffff;\">\n                      {{ $json.contrato }}\n                    </td>\n                  </tr>\n                  <tr>\n                    <td style=\"padding:12px 16px;font-size:15px;color:#657a91;background:#e8f1fb;\">\n                      Importe pagado:\n                    </td>\n                    <td align=\"right\" style=\"padding:12px 16px;font-size:15px;color:#2f4560;background:#e8f1fb;\">\n                      {{ $json['saldo pagado'] }}\n                    </td>\n                  </tr>\n                  <tr>\n                    <td style=\"padding:12px 16px;font-size:15px;color:#657a91;background:#ffffff;\">\n                      Saldo anterior:\n                    </td>\n                    <td align=\"right\" style=\"padding:12px 16px;font-size:15px;color:#2f4560;background:#ffffff;\">\n                      {{ $json['saldo anterior'] }}\n                    </td>\n                  </tr>\n                  <tr>\n                    <td style=\"padding:12px 16px;font-size:15px;color:#657a91;background:#e8f1fb;\">\n                      Saldo actual:\n                    </td>\n                    <td align=\"right\" style=\"padding:12px 16px;font-size:15px;color:#2f4560;background:#e8f1fb;\">\n                      {{ $json['saldo actual'] }}\n                    </td>\n                  </tr>\n                  <tr>\n                    <td style=\"padding:12px 16px;font-size:15px;color:#657a91;background:#ffffff;\">\n                      Forma de pago:\n                    </td>\n                    <td align=\"right\" style=\"padding:12px 16px;font-size:15px;color:#2f4560;background:#ffffff;\">\n                      {{ $json['Forma de pago'] }}\n                    </td>\n                  </tr>\n                  <!-- Última fila con bordes inferiores redondeados -->\n                  <tr>\n                    <td style=\"padding:12px 16px;font-size:15px;color:#657a91;background:#e8f1fb;border-bottom-left-radius:14px;\">\n                      Fecha de pago:\n                    </td>\n                    <td align=\"right\" style=\"padding:12px 16px;font-size:15px;color:#2f4560;background:#e8f1fb;border-bottom-right-radius:14px;\">\n                      {{ $json['fecha de pago'] }}\n                    </td>\n                  </tr>\n                </table>\n              </td>\n            </tr>\n          </table>\n        </td>\n      </tr>\n\n      <!-- ESPACIO EN BLANCO ENTRE TARJETA Y BANNER -->\n      <tr>\n        <td style=\"background:#ffffff;height:16px;line-height:16px;font-size:0;\">&nbsp;</td>\n      </tr>\n\n      <!-- Pie con imagen -->\n      <tr>\n        <td>\n          <img src=\"https://49611461.fs1.hubspotusercontent-na1.net/hubfs/49611461/Evo_ReciboPago_03.png\"\n               alt=\"Redes Evolucione\"\n               style=\"width:100%;height:auto;border-bottom-left-radius:14px;border-bottom-right-radius:14px;\">\n        </td>\n      </tr>\n\n    </table>\n  </center>\n</body>\n</html>\n"
+              }
+            ]
+          }
+        },
+        "typeVersion": 3.4
+      },
+      {
+        "id": "8beb70cd-268b-468f-a151-4167bf947a12",
+        "name": "Webhook1",
+        "type": "n8n-nodes-base.webhook",
+        "position": [
+          64,
+          208
+        ],
+        "webhookId": "e6193dcc-9880-49c0-823f-c6a792748acf",
+        "parameters": {
+          "path": "e6193dcc-9880-49c0-823f-c6a792748acf",
+          "options": {},
+          "httpMethod": "POST",
+          "responseMode": "responseNode"
+        },
+        "typeVersion": 2.1
+      },
+      {
+        "id": "66eadad5-1939-466f-82a8-437389378a73",
+        "name": "Code1",
+        "type": "n8n-nodes-base.code",
+        "position": [
+          512,
+          208
+        ],
+        "parameters": {
+          "jsCode": "const saldo_pagado = $input.first().json.body.saldo_pagado;\nconst saldo_anterior = $input.first().json.body.saldo_anterior;\nconst saldo_actual  = $input.first().json.body.Saldo_actual;\n\n// Formateador para moneda en formato colombiano\nconst formatoCOP = new Intl.NumberFormat(\"es-CO\", {\n  style: \"currency\",\n  currency: \"COP\",\n  minimumFractionDigits: 2\n});\n\nreturn [\n  {\n    json: {\n      saldo_pagado: formatoCOP.format(saldo_pagado),\n      saldo_anterior: formatoCOP.format(saldo_anterior),\n      saldo_actual: formatoCOP.format(saldo_actual)\n    }\n  }\n];\n\n"
+        },
+        "typeVersion": 2
+      },
+      {
+        "id": "d5525737-d56f-4840-8573-037c37298371",
+        "name": "Edit Fields2",
+        "type": "n8n-nodes-base.set",
+        "position": [
+          736,
+          208
+        ],
+        "parameters": {
+          "options": {},
+          "assignments": {
+            "assignments": [
+              {
+                "id": "93fdd599-66e1-4304-b519-9078afb90f71",
+                "name": "contrato",
+                "type": "string",
+                "value": "={{ $('Webhook1').item.json.body.Contrato }}"
+              },
+              {
+                "id": "012c339d-5041-42e5-ae8d-05581a0fedb7",
+                "name": "nombre",
+                "type": "string",
+                "value": "={{ $('Webhook1').item.json.body.Nombre }}"
+              },
+              {
+                "id": "b9a6cad1-c868-4b5f-86f5-b2e02a8b4a69",
+                "name": "saldo pagado",
+                "type": "string",
+                "value": "={{ $json.saldo_pagado }}"
+              },
+              {
+                "id": "bc8e64c9-cad4-4976-b588-6bf20612abdd",
+                "name": "saldo anterior",
+                "type": "string",
+                "value": "={{ $json.saldo_anterior }}"
+              },
+              {
+                "id": "fb473efa-8ceb-48d9-ab6b-bf5348a1683b",
+                "name": "saldo actual",
+                "type": "string",
+                "value": "={{ $json.saldo_actual }}"
+              },
+              {
+                "id": "c2e5b58b-5c08-4e99-afa9-4bd21181a4b6",
+                "name": "Forma de pago",
+                "type": "string",
+                "value": "={{ $('Webhook1').item.json.body.forma_de_pago }}"
+              },
+              {
+                "id": "883c4566-6672-48e2-8bc6-2860b3014278",
+                "name": "folio de cuota",
+                "type": "string",
+                "value": "={{ $('Webhook1').item.json.body.folio_de_la_cuota }}"
+              },
+              {
+                "id": "d1b09992-1531-4ca6-8255-0d171ef640d0",
+                "name": "fecha de pago",
+                "type": "string",
+                "value": "={{ $('Webhook1').item.json.body.fecha_de_pago }}"
+              },
+              {
+                "id": "cf83c1d6-a9cf-463e-85fc-86828b73b84d",
+                "name": "Empresa",
+                "type": "string",
+                "value": "=Evolucione"
+              }
+            ]
+          }
+        },
+        "typeVersion": 3.4
+      },
+      {
+        "id": "c491aa63-ce78-4bcd-b48a-c3551e244d53",
+        "name": "Wait",
+        "type": "n8n-nodes-base.wait",
+        "position": [
+          272,
+          208
+        ],
+        "webhookId": "14bcb0be-2612-4f4b-abce-6d05a7e13724",
+        "parameters": {
+          "amount": 25
+        },
+        "typeVersion": 1.1
+      }
+    ],
+    "connections": {
+      "HTTP Request": {
+        "main": [
+          [
+            {
+              "node": "Respond to Webhook",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Code": {
+        "main": [
+          [
+            {
+              "node": "HTTP Request",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Edit Fields1": {
+        "main": [
+          [
+            {
+              "node": "Code",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Webhook1": {
+        "main": [
+          [
+            {
+              "node": "Wait",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Code1": {
+        "main": [
+          [
+            {
+              "node": "Edit Fields2",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Edit Fields2": {
+        "main": [
+          [
+            {
+              "node": "Edit Fields1",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Wait": {
+        "main": [
+          [
+            {
+              "node": "Code1",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1"
+    },
+    "updatedAt": "2026-05-25T19:13:33.271+00:00"
+  },
+  {
+    "id": "8rEXKRmmyVqmrKBJ",
+    "name": "glish",
+    "active": true,
+    "nodes": [
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "http://gotenberg1:3000/forms/chromium/convert/html",
+          "sendBody": true,
+          "contentType": "multipart-form-data",
+          "bodyParameters": {
+            "parameters": [
+              {
+                "parameterType": "formBinaryData",
+                "name": "data",
+                "inputDataFieldName": "data"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1232,
+          -80
+        ],
+        "id": "2d5c8c62-0688-48bb-863c-3811ad33139b",
+        "name": "HTTP Request"
+      },
+      {
+        "parameters": {
+          "jsCode": "// Toma todos los items de entrada\nconst items = $input.all();\n\nfunction get(obj, path) {\n  return String(path).split('.').reduce((o, k) => (o && o[k] != null ? o[k] : ''), obj);\n}\n\nfor (const item of items) {\n  const ctx = item.json || {};\n  const tpl = ctx.plantilla_html;\n\n  if (typeof tpl !== 'string') {\n    // Mensaje claro si falta la plantilla\n    throw new Error(\"Falta 'plantilla_html' en item.json (debe ser String con el HTML de la plantilla).\");\n  }\n\n  // Render {{variable}} o {{obj.campo}}\n  const html = tpl.replace(/{{\\s*([\\w.]+)\\s*}}/g, (_, key) => {\n    const val = get(ctx, key);\n    return val == null ? '' : String(val);\n  });\n\n  // Crear binario para HTTP Request (Gotenberg)\n  item.binary = item.binary || {};\n  item.binary.data = {\n    data: Buffer.from(html, 'utf8'),\n    fileName: 'index.html',\n    mimeType: 'text/html',\n  };\n}\n\nreturn items;\n"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1008,
+          -80
+        ],
+        "id": "bd9b34fd-da5a-4d90-8102-a840d019cd09",
+        "name": "Code"
+      },
+      {
+        "parameters": {
+          "assignments": {
+            "assignments": [
+              {
+                "id": "93fdd599-66e1-4304-b519-9078afb90f71",
+                "name": "contrato",
+                "value": "={{ $('Webhook').item.json.body.Contrato }}",
+                "type": "string"
+              },
+              {
+                "id": "012c339d-5041-42e5-ae8d-05581a0fedb7",
+                "name": "nombre",
+                "value": "={{ $('Webhook').item.json.body.Nombre }}",
+                "type": "string"
+              },
+              {
+                "id": "b9a6cad1-c868-4b5f-86f5-b2e02a8b4a69",
+                "name": "saldo pagado",
+                "value": "={{ $json.saldo_pagado }}",
+                "type": "string"
+              },
+              {
+                "id": "bc8e64c9-cad4-4976-b588-6bf20612abdd",
+                "name": "saldo anterior",
+                "value": "={{ $json.saldo_anterior }}",
+                "type": "string"
+              },
+              {
+                "id": "fb473efa-8ceb-48d9-ab6b-bf5348a1683b",
+                "name": "saldo actual",
+                "value": "={{ $json.saldo_actual }}",
+                "type": "string"
+              },
+              {
+                "id": "c2e5b58b-5c08-4e99-afa9-4bd21181a4b6",
+                "name": "Forma de pago",
+                "value": "={{ $('Webhook').item.json.body.forma_de_pago }}",
+                "type": "string"
+              },
+              {
+                "id": "883c4566-6672-48e2-8bc6-2860b3014278",
+                "name": "folio de cuota",
+                "value": "={{ $('Webhook').item.json.body.folio_de_la_cuota }}",
+                "type": "string"
+              },
+              {
+                "id": "d1b09992-1531-4ca6-8255-0d171ef640d0",
+                "name": "fecha de pago",
+                "value": "={{ $('Webhook').item.json.body.fecha_de_pago }}",
+                "type": "string"
+              },
+              {
+                "id": "cf83c1d6-a9cf-463e-85fc-86828b73b84d",
+                "name": "Empresa",
+                "value": "=Glish",
+                "type": "string"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "type": "n8n-nodes-base.set",
+        "typeVersion": 3.4,
+        "position": [
+          560,
+          -80
+        ],
+        "id": "803ef8f2-0c44-44ec-8e30-9b4e4f1fc57e",
+        "name": "Edit Fields"
+      },
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "f0828146-51ad-44e4-98bd-9cb1f640664c",
+          "responseMode": "responseNode",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2.1,
+        "position": [
+          -96,
+          -80
+        ],
+        "id": "e9e459d9-a630-467e-8ae4-c3aff258462c",
+        "name": "Webhook",
+        "webhookId": "f0828146-51ad-44e4-98bd-9cb1f640664c"
+      },
+      {
+        "parameters": {
+          "respondWith": "binary",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1.4,
+        "position": [
+          1456,
+          -80
+        ],
+        "id": "46dec4ee-abb1-4f71-a295-032e2c0e840a",
+        "name": "Respond to Webhook"
+      },
+      {
+        "parameters": {
+          "assignments": {
+            "assignments": [
+              {
+                "id": "dcc12350-4f42-4024-8e43-2d0dbb39c398",
+                "name": "plantilla_html",
+                "value": "=<!DOCTYPE html>\n<html lang=\"es\">\n<head>\n  <meta charset=\"UTF-8\" />\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"/>\n  <title>Comprobante de pago - Glish</title>\n  <style>\n    body{margin:0;padding:0;background:#f2f6fb;font-family:Arial,Helvetica,sans-serif}\n    img{display:block;border:0;outline:0;text-decoration:none;max-width:100%}\n    table{border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt}\n    .main{max-width:550px;margin:0 auto}\n  </style>\n</head>\n<body>\n  <center role=\"article\" aria-roledescription=\"email\" style=\"width:100%;background:#f2f6fb;\">\n    <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" class=\"main\">\n\n      <!-- Banner superior -->\n      <tr>\n        <td>\n          <img src=\"https://49611461.fs1.hubspotusercontent-na1.net/hubfs/49611461/Soportes/Dise%C3%B1o%20sin%20t%C3%ADtulo.jpg\"\n               alt=\"Glish\"\n               style=\"width:100%;height:auto;border-top-left-radius:14px;border-top-right-radius:14px;\">\n        </td>\n      </tr>\n\n      <!-- Intro -->\n      <tr>\n        <td style=\"background:#ffffff;padding:18px 18px 10px;text-align:center;\">\n          <p style=\"margin:0 0 5px;font-size:21px;line-height:1.3;color:#0b6ea9;font-weight:700;\">\n            Hola {{ $json.nombre }}, ¡Gracias por tu pago!\n          </p>\n          <p style=\"margin:0 0 8px;font-size:15px;color:#5f6f7f;\">\n            A continuación te compartimos los detalles:\n          </p>\n        </td>\n      </tr>\n\n      <!-- Tarjeta de detalles -->\n      <tr>\n        <td style=\"background:#ffffff;padding:0 18px;\">\n          <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\"\n                 style=\"background:#eaf3ff;border-radius:16px;\">\n            <tr>\n              <td style=\"padding:9px;\">\n                <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\"\n                       style=\"background:#ffffff;border-radius:16px;\">\n                  <tr>\n                    <td style=\"padding:12px 16px;font-size:15px;color:#657a91;background:#ffffff;\">\n                      Folio de la cuota:</td>\n                    <td align=\"right\"\n                        style=\"padding:12px 16px;font-size:15px;color:#2f4560;background:#ffffff;\">\n                      {{ $json['folio de cuota'] }}</td>\n                  </tr>\n                  <tr>\n                    <td style=\"padding:12px 16px;font-size:15px;color:#657a91;background:#e8f1fb;\">\n                      Nombre completo:</td>\n                    <td align=\"right\"\n                        style=\"padding:12px 16px;font-size:15px;color:#2f4560;background:#e8f1fb;\">\n                      {{ $json.nombre }}</td>\n                  </tr>\n                  <tr>\n                    <td style=\"padding:12px 16px;font-size:15px;color:#657a91;background:#ffffff;\">\n                      Matricula</td>\n                    <td align=\"right\"\n                        style=\"padding:12px 16px;font-size:15px;color:#2f4560;background:#ffffff;\">\n                      {{ $json.contrato }}</td>\n                  </tr>\n                  <tr>\n                    <td style=\"padding:12px 16px;font-size:15px;color:#657a91;background:#e8f1fb;\">\n                      Importe pagado:</td>\n                    <td align=\"right\"\n                        style=\"padding:12px 16px;font-size:15px;color:#2f4560;background:#e8f1fb;\">\n                      {{ $json['saldo pagado'] }}</td>\n                  </tr>\n                  <tr>\n                    <td style=\"padding:12px 16px;font-size:15px;color:#657a91;background:#ffffff;\">\n                      Saldo anterior:</td>\n                    <td align=\"right\"\n                        style=\"padding:12px 16px;font-size:15px;color:#2f4560;background:#ffffff;\">\n                      {{ $json['saldo anterior'] }}</td>\n                  </tr>\n                  <tr>\n                    <td style=\"padding:12px 16px;font-size:15px;color:#657a91;background:#e8f1fb;\">\n                      Saldo actual:</td>\n                    <td align=\"right\"\n                        style=\"padding:12px 16px;font-size:15px;color:#2f4560;background:#e8f1fb;\">\n                      {{ $json['saldo actual'] }}</td>\n                  </tr>\n                  <tr>\n                    <td style=\"padding:12px 16px;font-size:15px;color:#657a91;background:#ffffff;\">\n                      Forma de pago:</td>\n                    <td align=\"right\"\n                        style=\"padding:12px 16px;font-size:15px;color:#2f4560;background:#ffffff;\">\n                      {{ $json['Forma de pago'] }}</td>\n                  </tr>\n                  <!-- Última fila con esquinas inferiores redondeadas -->\n                  <tr>\n                    <td style=\"padding:12px 16px;font-size:15px;color:#657a91;background:#e8f1fb;border-bottom-left-radius:14px;\">\n                      Fecha de pago:</td>\n                    <td align=\"right\"\n                        style=\"padding:12px 16px;font-size:15px;color:#2f4560;background:#e8f1fb;border-bottom-right-radius:14px;\">\n                      {{ $json['fecha de pago'] }}</td>\n                  </tr>\n                </table>\n              </td>\n            </tr>\n          </table>\n        </td>\n      </tr>\n\n      <!-- ESPACIO EN BLANCO ENTRE TARJETA Y BANNER -->\n      <tr>\n        <td style=\"background:#ffffff;height:16px;line-height:16px;font-size:0;\">&nbsp;</td>\n      </tr>\n\n      <!-- Pie con imagen -->\n      <tr>\n        <td>\n          <img src=\"https://49611461.fs1.hubspotusercontent-na1.net/hubfs/49611461/Soportes/Dise%C3%B1o%20sin%20t%C3%ADtulo%20(1).jpg\"\n               alt=\"Redes Glish\"\n               style=\"width:100%;height:auto;border-bottom-left-radius:14px;border-bottom-right-radius:14px;\">\n        </td>\n      </tr>\n\n    </table>\n  </center>\n</body>\n</html>",
+                "type": "string"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "type": "n8n-nodes-base.set",
+        "typeVersion": 3.4,
+        "position": [
+          784,
+          -80
+        ],
+        "id": "60f8dfd6-5475-414a-bddb-adeda3f6df9b",
+        "name": "Edit Fields1"
+      },
+      {
+        "parameters": {
+          "jsCode": "const saldo_pagado = $input.first().json.body.saldo_pagado;\nconst saldo_anterior = $input.first().json.body.saldo_anterior;\nconst saldo_actual  = $input.first().json.body.Saldo_actual;\n\n// Formateador para moneda en formato colombiano\nconst formatoCOP = new Intl.NumberFormat(\"es-CO\", {\n  style: \"currency\",\n  currency: \"COP\",\n  minimumFractionDigits: 2\n});\n\nreturn [\n  {\n    json: {\n      saldo_pagado: formatoCOP.format(saldo_pagado),\n      saldo_anterior: formatoCOP.format(saldo_anterior),\n      saldo_actual: formatoCOP.format(saldo_actual)\n    }\n  }\n];\n\n"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          336,
+          -80
+        ],
+        "id": "a9e5c931-fb90-43de-a6f3-4ed52666c886",
+        "name": "Code1"
+      },
+      {
+        "parameters": {
+          "amount": 25
+        },
+        "type": "n8n-nodes-base.wait",
+        "typeVersion": 1.1,
+        "position": [
+          112,
+          -80
+        ],
+        "id": "272a4037-2da3-4864-9224-20051a84c857",
+        "name": "Wait",
+        "webhookId": "19d856d4-9e1f-4be5-801b-efbad2e25db9"
+      }
+    ],
+    "connections": {
+      "HTTP Request": {
+        "main": [
+          [
+            {
+              "node": "Respond to Webhook",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Code": {
+        "main": [
+          [
+            {
+              "node": "HTTP Request",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Edit Fields": {
+        "main": [
+          [
+            {
+              "node": "Edit Fields1",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Webhook": {
+        "main": [
+          [
+            {
+              "node": "Wait",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Edit Fields1": {
+        "main": [
+          [
+            {
+              "node": "Code",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Code1": {
+        "main": [
+          [
+            {
+              "node": "Edit Fields",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Wait": {
+        "main": [
+          [
+            {
+              "node": "Code1",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1"
+    },
+    "updatedAt": "2026-05-25T19:12:35.868+00:00"
+  },
+  {
+    "id": "KZJErvqBiDEq7KJW",
+    "name": "My workflow 3",
+    "active": true,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "68d076bd-ad89-4723-93bf-1b623c18c1a1",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2.1,
+        "position": [
+          0,
+          0
+        ],
+        "id": "422de771-87e2-498e-afc4-639a42277705",
+        "name": "Webhook",
+        "webhookId": "68d076bd-ad89-4723-93bf-1b623c18c1a1"
+      }
+    ],
+    "connections": {},
+    "settings": {
+      "executionOrder": "v1",
+      "availableInMCP": false
+    },
+    "updatedAt": "2026-01-22T14:21:57.925+00:00"
+  },
+  {
+    "id": "sTkCsUwmDjXJzgvP",
+    "name": "glish copy",
+    "active": true,
+    "nodes": [
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "http://gotenberg1:3000/forms/chromium/convert/html",
+          "sendBody": true,
+          "contentType": "multipart-form-data",
+          "bodyParameters": {
+            "parameters": [
+              {
+                "parameterType": "formBinaryData",
+                "name": "data",
+                "inputDataFieldName": "data"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1024,
+          -80
+        ],
+        "id": "2cc0e06c-25e5-4daf-a3df-92c0062aeb54",
+        "name": "HTTP Request"
+      },
+      {
+        "parameters": {
+          "jsCode": "// Toma todos los items de entrada\nconst items = $input.all();\n\nfunction get(obj, path) {\n  return String(path).split('.').reduce((o, k) => (o && o[k] != null ? o[k] : ''), obj);\n}\n\nfor (const item of items) {\n  const ctx = item.json || {};\n  const tpl = ctx.plantilla_html;\n\n  if (typeof tpl !== 'string') {\n    // Mensaje claro si falta la plantilla\n    throw new Error(\"Falta 'plantilla_html' en item.json (debe ser String con el HTML de la plantilla).\");\n  }\n\n  // Render {{variable}} o {{obj.campo}}\n  const html = tpl.replace(/{{\\s*([\\w.]+)\\s*}}/g, (_, key) => {\n    const val = get(ctx, key);\n    return val == null ? '' : String(val);\n  });\n\n  // Crear binario para HTTP Request (Gotenberg)\n  item.binary = item.binary || {};\n  item.binary.data = {\n    data: Buffer.from(html, 'utf8'),\n    fileName: 'index.html',\n    mimeType: 'text/html',\n  };\n}\n\nreturn items;\n"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          800,
+          -80
+        ],
+        "id": "b19010eb-4f41-47c6-bc8e-34000f20b1db",
+        "name": "Code"
+      },
+      {
+        "parameters": {
+          "assignments": {
+            "assignments": [
+              {
+                "id": "93fdd599-66e1-4304-b519-9078afb90f71",
+                "name": "contrato",
+                "value": "={{ $('Webhook').item.json.body.Contrato }}",
+                "type": "string"
+              },
+              {
+                "id": "012c339d-5041-42e5-ae8d-05581a0fedb7",
+                "name": "nombre",
+                "value": "={{ $('Webhook').item.json.body.Nombre }}",
+                "type": "string"
+              },
+              {
+                "id": "b9a6cad1-c868-4b5f-86f5-b2e02a8b4a69",
+                "name": "saldo pagado",
+                "value": "={{ $json.saldo_pagado }}",
+                "type": "string"
+              },
+              {
+                "id": "bc8e64c9-cad4-4976-b588-6bf20612abdd",
+                "name": "saldo anterior",
+                "value": "={{ $json.saldo_anterior }}",
+                "type": "string"
+              },
+              {
+                "id": "fb473efa-8ceb-48d9-ab6b-bf5348a1683b",
+                "name": "saldo actual",
+                "value": "={{ $json.saldo_actual }}",
+                "type": "string"
+              },
+              {
+                "id": "c2e5b58b-5c08-4e99-afa9-4bd21181a4b6",
+                "name": "Forma de pago",
+                "value": "={{ $('Webhook').item.json.body.forma_de_pago }}",
+                "type": "string"
+              },
+              {
+                "id": "883c4566-6672-48e2-8bc6-2860b3014278",
+                "name": "folio de cuota",
+                "value": "={{ $('Webhook').item.json.body.folio_de_la_cuota }}",
+                "type": "string"
+              },
+              {
+                "id": "d1b09992-1531-4ca6-8255-0d171ef640d0",
+                "name": "fecha de pago",
+                "value": "={{ $('Webhook').item.json.body.fecha_de_pago }}",
+                "type": "string"
+              },
+              {
+                "id": "cf83c1d6-a9cf-463e-85fc-86828b73b84d",
+                "name": "Empresa",
+                "value": "=Glish",
+                "type": "string"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "type": "n8n-nodes-base.set",
+        "typeVersion": 3.4,
+        "position": [
+          352,
+          -80
+        ],
+        "id": "69a4fa30-b338-4ee9-8e7d-0ebf1c3dc1a6",
+        "name": "Edit Fields"
+      },
+      {
+        "parameters": {
+          "respondWith": "binary",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1.4,
+        "position": [
+          1248,
+          -80
+        ],
+        "id": "700edd39-c34c-4a79-8926-d963874f5d80",
+        "name": "Respond to Webhook"
+      },
+      {
+        "parameters": {
+          "assignments": {
+            "assignments": [
+              {
+                "id": "dcc12350-4f42-4024-8e43-2d0dbb39c398",
+                "name": "plantilla_html",
+                "value": "=<!DOCTYPE html>\n<html lang=\"es\">\n<head>\n  <meta charset=\"UTF-8\" />\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"/>\n  <title>Comprobante de pago - Glish</title>\n  <style>\n    body{margin:0;padding:0;background:#f2f6fb;font-family:Arial,Helvetica,sans-serif}\n    img{display:block;border:0;outline:0;text-decoration:none;max-width:100%}\n    table{border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt}\n    .main{max-width:550px;margin:0 auto}\n  </style>\n</head>\n<body>\n  <center role=\"article\" aria-roledescription=\"email\" style=\"width:100%;background:#f2f6fb;\">\n    <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" class=\"main\">\n\n      <!-- Banner superior -->\n      <tr>\n        <td>\n          <img src=\"https://49611461.fs1.hubspotusercontent-na1.net/hubfs/49611461/Soportes/Dise%C3%B1o%20sin%20t%C3%ADtulo.jpg\"\n               alt=\"Glish\"\n               style=\"width:100%;height:auto;border-top-left-radius:14px;border-top-right-radius:14px;\">\n        </td>\n      </tr>\n\n      <!-- Intro -->\n      <tr>\n        <td style=\"background:#ffffff;padding:18px 18px 10px;text-align:center;\">\n          <p style=\"margin:0 0 5px;font-size:21px;line-height:1.3;color:#0b6ea9;font-weight:700;\">\n            Hola {{ $json.nombre }}, ¡Gracias por tu pago!\n          </p>\n          <p style=\"margin:0 0 8px;font-size:15px;color:#5f6f7f;\">\n            A continuación te compartimos los detalles:\n          </p>\n        </td>\n      </tr>\n\n      <!-- Tarjeta de detalles -->\n      <tr>\n        <td style=\"background:#ffffff;padding:0 18px;\">\n          <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\"\n                 style=\"background:#eaf3ff;border-radius:16px;\">\n            <tr>\n              <td style=\"padding:9px;\">\n                <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\"\n                       style=\"background:#ffffff;border-radius:16px;\">\n                  <tr>\n                    <td style=\"padding:12px 16px;font-size:15px;color:#657a91;background:#ffffff;\">\n                      Folio de la cuota:</td>\n                    <td align=\"right\"\n                        style=\"padding:12px 16px;font-size:15px;color:#2f4560;background:#ffffff;\">\n                      {{ $json['folio de cuota'] }}</td>\n                  </tr>\n                  <tr>\n                    <td style=\"padding:12px 16px;font-size:15px;color:#657a91;background:#e8f1fb;\">\n                      Nombre completo:</td>\n                    <td align=\"right\"\n                        style=\"padding:12px 16px;font-size:15px;color:#2f4560;background:#e8f1fb;\">\n                      {{ $json.nombre }}</td>\n                  </tr>\n                  <tr>\n                    <td style=\"padding:12px 16px;font-size:15px;color:#657a91;background:#ffffff;\">\n                      Matricula</td>\n                    <td align=\"right\"\n                        style=\"padding:12px 16px;font-size:15px;color:#2f4560;background:#ffffff;\">\n                      {{ $json.contrato }}</td>\n                  </tr>\n                  <tr>\n                    <td style=\"padding:12px 16px;font-size:15px;color:#657a91;background:#e8f1fb;\">\n                      Importe pagado:</td>\n                    <td align=\"right\"\n                        style=\"padding:12px 16px;font-size:15px;color:#2f4560;background:#e8f1fb;\">\n                      {{ $json['saldo pagado'] }}</td>\n                  </tr>\n                  <tr>\n                    <td style=\"padding:12px 16px;font-size:15px;color:#657a91;background:#ffffff;\">\n                      Saldo anterior:</td>\n                    <td align=\"right\"\n                        style=\"padding:12px 16px;font-size:15px;color:#2f4560;background:#ffffff;\">\n                      {{ $json['saldo anterior'] }}</td>\n                  </tr>\n                  <tr>\n                    <td style=\"padding:12px 16px;font-size:15px;color:#657a91;background:#e8f1fb;\">\n                      Saldo actual:</td>\n                    <td align=\"right\"\n                        style=\"padding:12px 16px;font-size:15px;color:#2f4560;background:#e8f1fb;\">\n                      {{ $json['saldo actual'] }}</td>\n                  </tr>\n                  <tr>\n                    <td style=\"padding:12px 16px;font-size:15px;color:#657a91;background:#ffffff;\">\n                      Forma de pago:</td>\n                    <td align=\"right\"\n                        style=\"padding:12px 16px;font-size:15px;color:#2f4560;background:#ffffff;\">\n                      {{ $json['Forma de pago'] }}</td>\n                  </tr>\n                  <!-- Última fila con esquinas inferiores redondeadas -->\n                  <tr>\n                    <td style=\"padding:12px 16px;font-size:15px;color:#657a91;background:#e8f1fb;border-bottom-left-radius:14px;\">\n                      Fecha de pago:</td>\n                    <td align=\"right\"\n                        style=\"padding:12px 16px;font-size:15px;color:#2f4560;background:#e8f1fb;border-bottom-right-radius:14px;\">\n                      {{ $json['fecha de pago'] }}</td>\n                  </tr>\n                </table>\n              </td>\n            </tr>\n          </table>\n        </td>\n      </tr>\n\n      <!-- ESPACIO EN BLANCO ENTRE TARJETA Y BANNER -->\n      <tr>\n        <td style=\"background:#ffffff;height:16px;line-height:16px;font-size:0;\">&nbsp;</td>\n      </tr>\n\n      <!-- Pie con imagen -->\n      <tr>\n        <td>\n          <img src=\"https://49611461.fs1.hubspotusercontent-na1.net/hubfs/49611461/Soportes/Dise%C3%B1o%20sin%20t%C3%ADtulo%20(1).jpg\"\n               alt=\"Redes Glish\"\n               style=\"width:100%;height:auto;border-bottom-left-radius:14px;border-bottom-right-radius:14px;\">\n        </td>\n      </tr>\n\n    </table>\n  </center>\n</body>\n</html>",
+                "type": "string"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "type": "n8n-nodes-base.set",
+        "typeVersion": 3.4,
+        "position": [
+          576,
+          -80
+        ],
+        "id": "cd9f22d8-fb9f-4cb0-9af4-bea0cb0a47fc",
+        "name": "Edit Fields1"
+      },
+      {
+        "parameters": {
+          "jsCode": "const saldo_pagado = $input.first().json.body.saldo_pagado;\nconst saldo_anterior = $input.first().json.body.saldo_anterior;\nconst saldo_actual  = $input.first().json.body.Saldo_actual;\n\n// Formateador para moneda en formato colombiano\nconst formatoCOP = new Intl.NumberFormat(\"es-CO\", {\n  style: \"currency\",\n  currency: \"COP\",\n  minimumFractionDigits: 2\n});\n\nreturn [\n  {\n    json: {\n      saldo_pagado: formatoCOP.format(saldo_pagado),\n      saldo_anterior: formatoCOP.format(saldo_anterior),\n      saldo_actual: formatoCOP.format(saldo_actual)\n    }\n  }\n];\n\n"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          128,
+          -80
+        ],
+        "id": "3c557144-a981-44c3-9b47-ffc789bd8004",
+        "name": "Code1"
+      },
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "52633b76-26bd-4c31-8048-a27a6d3452b3",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2.1,
+        "position": [
+          -96,
+          -80
+        ],
+        "id": "44a28b1c-2c9f-47f0-825c-b24c7f4fca1a",
+        "name": "Webhook1",
+        "webhookId": "52633b76-26bd-4c31-8048-a27a6d3452b3"
+      }
+    ],
+    "connections": {
+      "HTTP Request": {
+        "main": [
+          [
+            {
+              "node": "Respond to Webhook",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Code": {
+        "main": [
+          [
+            {
+              "node": "HTTP Request",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Edit Fields": {
+        "main": [
+          [
+            {
+              "node": "Edit Fields1",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Edit Fields1": {
+        "main": [
+          [
+            {
+              "node": "Code",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Code1": {
+        "main": [
+          [
+            {
+              "node": "Edit Fields",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Webhook1": {
+        "main": [
+          [
+            {
+              "node": "Code1",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "availableInMCP": false
+    },
+    "updatedAt": "2026-01-08T20:03:03.32+00:00"
+  },
+  {
+    "id": "2FeVQw53CGjLGyob",
+    "name": "My workflow 2",
+    "active": true,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "test-parallel",
+          "responseMode": "responseNode",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2.1,
+        "position": [
+          0,
+          0
+        ],
+        "id": "272b5c58-5e27-497f-b0bd-438587e73501",
+        "name": "Webhook",
+        "webhookId": "6986091f-3a57-40ea-a8c6-f9a1182754e4"
+      },
+      {
+        "parameters": {
+          "command": "sleep 20"
+        },
+        "type": "n8n-nodes-base.executeCommand",
+        "typeVersion": 1,
+        "position": [
+          208,
+          0
+        ],
+        "id": "ff89b9f7-3ca1-4918-93ad-70b008b6fb1a",
+        "name": "Execute Command"
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "{\"status\":\"done\",\"ts\":\"={{$now}}\"}",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1.4,
+        "position": [
+          416,
+          0
+        ],
+        "id": "7bd62486-261c-489c-91f0-37ce45725d10",
+        "name": "Respond to Webhook"
+      }
+    ],
+    "connections": {
+      "Webhook": {
+        "main": [
+          [
+            {
+              "node": "Execute Command",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Execute Command": {
+        "main": [
+          [
+            {
+              "node": "Respond to Webhook",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1"
+    },
+    "updatedAt": "2025-08-25T14:30:00.23+00:00"
+  },
+  {
+    "id": "lpJEZFgMA2tfE1KS",
+    "name": "My workflow",
+    "active": true,
+    "nodes": [
+      {
+        "parameters": {
+          "multipleMethods": true,
+          "httpMethod": [
+            "POST"
+          ],
+          "path": "b4c4d988-3777-4f8c-b963-2da51eddc748",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2.1,
+        "position": [
+          0,
+          0
+        ],
+        "id": "3ecfeb04-eade-4ece-8f00-5a345e940bb5",
+        "name": "Webhook",
+        "webhookId": "b4c4d988-3777-4f8c-b963-2da51eddc748",
+        "executeOnce": false
+      }
+    ],
+    "connections": {},
+    "settings": {
+      "executionOrder": "v1"
+    },
+    "updatedAt": "2025-08-24T16:13:58.829+00:00"
+  },
+  {
+    "id": "PIBXtYiRzLS6cDzv",
+    "name": "test",
+    "active": true,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "test-workers",
+          "options": {}
+        },
+        "id": "4fa20eb0-9ec0-4fd3-b3a7-54b0583a24d6",
+        "name": "Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 1,
+        "position": [
+          0,
+          0
+        ],
+        "webhookId": "test-workers-123"
+      },
+      {
+        "parameters": {
+          "functionCode": "return new Promise(resolve => { setTimeout(() => { resolve(items); }, 60000); });"
+        },
+        "id": "74d1e09e-e28f-40a0-8e2e-39976d90c873",
+        "name": "Sleep 60s",
+        "type": "n8n-nodes-base.function",
+        "typeVersion": 1,
+        "position": [
+          256,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "options": {}
+        },
+        "id": "c49ffb26-f6de-4529-806d-0e3562d9b893",
+        "name": "Respond",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1,
+        "position": [
+          512,
+          0
+        ]
+      }
+    ],
+    "connections": {
+      "Webhook": {
+        "main": [
+          [
+            {
+              "node": "Sleep 60s",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Sleep 60s": {
+        "main": [
+          [
+            {
+              "node": "Respond",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1"
+    },
+    "updatedAt": "2025-08-22T22:21:01.654+00:00"
+  }
+]

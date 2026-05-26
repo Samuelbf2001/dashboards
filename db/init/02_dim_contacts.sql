@@ -39,7 +39,13 @@ CREATE TABLE IF NOT EXISTS dim_contacts (
   referrer_first      TEXT,
   gclid_first         VARCHAR(200),    -- Google Click ID (Google Ads attribution)
   fbclid_first        VARCHAR(200),    -- Facebook Click ID
-  campaign_id_first   VARCHAR(100),    -- Campaign ID de Meta o GHL
+  campaign_id_first   VARCHAR(100),    -- GHL attributions[].utmAdId — Meta ad ID (CTWA)
+  ad_id_first         VARCHAR(100),    -- attributionSource.adId — Meta ad ID primer toque (CTWA)
+  ad_id_last          VARCHAR(100),    -- lastAttributionSource.adId — Meta ad ID último toque
+  ad_name_first       VARCHAR(500),    -- attributionSource.adName — nombre del anuncio (CTWA)
+  ad_name_last        VARCHAR(500),    -- lastAttributionSource.adName — nombre último toque
+  ctwa_clid_first     VARCHAR(500),    -- Click-to-WhatsApp click ID primer toque
+  ctwa_clid_last      VARCHAR(500),    -- CTWA click ID último toque
 
   -- ─── Atribución — Último toque ───────────────────────────────────────────
   utm_source_last     VARCHAR(200),    -- lastAttributionSource.utmSource

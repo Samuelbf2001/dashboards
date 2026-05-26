@@ -8,19 +8,29 @@ Para el plan de implementacion completo ver: [IMPLEMENTATION_PLAN.md](IMPLEMENTA
 
 ---
 
-## Quick Start (3 comandos)
+## Quick Start (5 pasos)
 
 ```bash
-# 1. Clonar el repositorio y configurar entorno
+# 1. Copiar y editar variables de entorno (rellenar todos los valores reales)
 cp .env.example .env
-# Editar .env con tus valores
+nano .env   # o el editor de tu preferencia
 
-# 2. Levantar el stack completo
-docker compose -f infra/docker-compose.yml up -d
+# 2. Validar .env y generar cors.yml con dominios reales (REQUERIDO antes del deploy)
+bash setup.sh
 
-# 3. Validar que todo esta funcionando
+# 3. Levantar el stack completo
+docker compose up -d
+
+# 4. Importar los 14 workflows a n8n (con el stack levantado)
+bash scripts/import_n8n_workflows.sh
+
+# 5. Validar que todo esta funcionando
 bash tests/run_all.sh --skip-non-blocking
 ```
+
+`setup.sh` valida que todas las variables requeridas estén configuradas y genera
+`infra/traefik/dynamic/cors.yml` con los dominios reales (Traefik no interpola
+variables de entorno en archivos de configuración dinámica).
 
 Tiempo estimado para el stack completo: 5-10 minutos (Metabase tarda en inicializar).
 

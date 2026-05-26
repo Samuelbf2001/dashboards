@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS dim_conversations (
 
   -- ─── KPIs de tiempo de respuesta ─────────────────────────────────────────
   first_inbound_at     TIMESTAMPTZ,     -- Primer mensaje entrante del contacto
+  first_inbound_body   TEXT,            -- Texto del primer mensaje del cliente (para calificación y análisis)
   first_outbound_at    TIMESTAMPTZ,     -- Primer mensaje saliente del asesor o bot
   last_message_at      TIMESTAMPTZ,     -- Último mensaje en cualquier dirección
 

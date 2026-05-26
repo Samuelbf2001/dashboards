@@ -5,10 +5,18 @@
       "id": "node-01-cron",
       "name": "Cron cada 60 min",
       "type": "n8n-nodes-base.scheduleTrigger",
-      "position": [240, 300],
+      "position": [
+        240,
+        300
+      ],
       "parameters": {
         "rule": {
-          "interval": [{ "field": "minutes", "minutesInterval": 60 }]
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 60
+            }
+          ]
         }
       }
     },
@@ -16,7 +24,10 @@
       "id": "node-02-locations",
       "name": "Expandir Location IDs",
       "type": "n8n-nodes-base.code",
-      "position": [460, 300],
+      "position": [
+        460,
+        300
+      ],
       "parameters": {
         "jsCode": "// Expandir GHL_LOCATION_IDS (CSV) en items separados para iterar\nconst ids = String($env.GHL_LOCATION_IDS || '').split(',').map(s => s.trim()).filter(Boolean);\nif (ids.length === 0) throw new Error('GHL_LOCATION_IDS no configurado');\nreturn ids.map(location_id => ({ json: { location_id } }));"
       }
@@ -25,7 +36,10 @@
       "id": "node-03-read-cursor",
       "name": "Leer Cursor ghl_sync_state",
       "type": "n8n-nodes-base.postgres",
-      "position": [680, 300],
+      "position": [
+        680,
+        300
+      ],
       "parameters": {
         "operation": "executeQuery",
         "query": "INSERT INTO ghl_sync_state (entity, location_id, last_synced_at, records_synced, updated_at) VALUES ('contacts', $1, NULL, 0, NOW()) ON CONFLICT (entity, location_id) DO NOTHING; SELECT entity, location_id, last_synced_at, last_cursor, records_synced FROM ghl_sync_state WHERE entity = 'contacts' AND location_id = $1",
@@ -34,14 +48,20 @@
         }
       },
       "credentials": {
-        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+        "postgres": {
+          "id": "postgres-n8n-writer",
+          "name": "Postgres n8n_writer"
+        }
       }
     },
     {
       "id": "node-04-fetch-page",
       "name": "Fetch Pagina GHL API Contacts",
       "type": "n8n-nodes-base.code",
-      "position": [900, 300],
+      "position": [
+        900,
+        300
+      ],
       "parameters": {
         "jsCode": "// Llama a GHL API v2 para obtener contactos con cursor incremental.\n// Respeta rate limit: 80 req/10s con backoff exponencial.\n// Ref: GHL_Platform.txt seccion 5.3\n\nconst stateRow     = $input.first().json;\nconst location_id  = stateRow.location_id;\nconst lastSynced   = stateRow.last_synced_at;\nconst lastCursor   = stateRow.last_cursor;\n\nconst apiKey = $env.GHL_API_KEY;\nif (!apiKey) throw new Error('GHL_API_KEY no configurado');\n\nlet allContacts = [];\nlet nextCursor  = lastCursor || null;\nlet page = 0;\nconst MAX_PAGES = 200;  // proteccion contra loop infinito\n\nasync function sleep(ms) {\n  return new Promise(r => setTimeout(r, ms));\n}\n\nwhile (page < MAX_PAGES) {\n  const url = new URL(`https://services.leadconnectorhq.com/contacts/`);\n  url.searchParams.set('locationId', location_id);\n  url.searchParams.set('limit', '100');\n  if (lastSynced && !nextCursor) {\n    url.searchParams.set('startAfterDate', lastSynced);\n  }\n  if (nextCursor) {\n    url.searchParams.set('startAfter', nextCursor);\n  }\n\n  let resp;\n  let retries = 0;\n  while (retries < 5) {\n    try {\n      resp = await fetch(url.toString(), {\n        headers: {\n          'Authorization': 'Bearer ' + apiKey,\n          'Version':       '2021-07-28',\n          'Content-Type':  'application/json'\n        }\n      });\n      if (resp.status === 429) {\n        // Rate limit: esperar backoff exponencial\n        const waitMs = Math.pow(2, retries) * 1000;\n        await sleep(waitMs);\n        retries++;\n        continue;\n      }\n      break;\n    } catch (err) {\n      if (retries >= 4) throw err;\n      await sleep(Math.pow(2, retries) * 1000);\n      retries++;\n    }\n  }\n\n  if (!resp.ok) throw new Error('GHL API error: ' + resp.status + ' en contacts');\n\n  const data = await resp.json();\n  const contacts = data.contacts || [];\n  allContacts = allContacts.concat(contacts);\n\n  nextCursor = data.meta?.nextPageUrl ? data.meta.startAfter : null;\n  if (!nextCursor || contacts.length === 0) break;\n\n  page++;\n  // Pequena pausa para no agotar rate limit (80 req / 10s = ~125ms por req)\n  await sleep(130);\n}\n\nreturn [{ json: { location_id, contacts: allContacts, next_cursor: nextCursor } }];"
       }
@@ -50,16 +70,22 @@
       "id": "node-05-sanitize-batch",
       "name": "Sanitizar Batch Contactos",
       "type": "n8n-nodes-base.code",
-      "position": [1120, 300],
+      "position": [
+        1120,
+        300
+      ],
       "parameters": {
-        "jsCode": "// Sanitizar todos los contactos del batch\nconst REGEX_GHL_ID      = /^[a-zA-Z0-9_-]{8,50}$/;\nconst REGEX_LOCATION_ID = /^[a-zA-Z0-9]{10,30}$/;\nconst REGEX_EMAIL       = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$/;\n\nfunction cleanStr(val, maxLen) {\n  if (!val) return null;\n  const s = String(val).trim().substring(0, maxLen);\n  return s.length > 0 ? s : null;\n}\nfunction normalizeE164(raw) {\n  if (!raw) return null;\n  let digits = String(raw).replace(/[^\\d+]/g, '');\n  if (digits.startsWith('+')) { const c = '+' + digits.slice(1); return (c.length >= 8 && c.length <= 16) ? c : null; }\n  if (/^3\\d{9}$/.test(digits)) return '+57' + digits;\n  if (/^57\\d{10}$/.test(digits)) return '+' + digits;\n  if (digits.length >= 7 && digits.length <= 15) return '+' + digits;\n  return null;\n}\nfunction validateEmail(val) {\n  if (!val) return null;\n  const n = String(val).toLowerCase().trim().substring(0, 255);\n  return REGEX_EMAIL.test(n) ? n : null;\n}\nfunction parseISODate(val) {\n  if (!val) return null;\n  const ts = Date.parse(String(val));\n  return isNaN(ts) ? null : new Date(ts).toISOString();\n}\n\nconst { location_id, contacts, next_cursor } = $input.first().json;\n\nconst cleaned = contacts\n  .filter(c => {\n    const cid = String(c.id || '').trim();\n    const lid = String(c.locationId || '').trim();\n    return REGEX_GHL_ID.test(cid) && REGEX_LOCATION_ID.test(lid);\n  })\n  .map(c => {\n    const attrFirst = c.attributionSource || {};\n    const attrLast  = c.lastAttributionSource || {};\n    return {\n      contact_id:          String(c.id).trim(),\n      location_id:         String(c.locationId).trim(),\n      email:               validateEmail(c.email),\n      phone:               normalizeE164(c.phone),\n      first_name:          cleanStr(c.firstName, 100),\n      last_name:           cleanStr(c.lastName,  100),\n      source:              cleanStr(c.source, 100),\n      tags:                Array.isArray(c.tags) ? c.tags.slice(0, 200).map(t => String(t).trim().substring(0, 200)) : null,\n      contact_type:        cleanStr(c.contactType || c.type, 50),\n      dnd:                 c.dnd === true || c.dnd === 'true',\n      custom_fields:       (c.customFields && typeof c.customFields === 'object') ? c.customFields : null,\n      utm_source_first:    cleanStr(attrFirst.utmSource, 200),\n      utm_medium_first:    cleanStr(attrFirst.utmMedium, 200),\n      utm_campaign_first:  cleanStr(attrFirst.utmCampaign, 200),\n      utm_content_first:   cleanStr(attrFirst.utmContent,  200),\n      utm_term_first:      cleanStr(attrFirst.utmTerm,     200),\n      landing_url_first:   cleanStr(attrFirst.url,         2048),\n      referrer_first:      cleanStr(attrFirst.referrer,    2048),\n      gclid_first:         cleanStr(attrFirst.gclid,       200),\n      fbclid_first:        cleanStr(attrFirst.fbclid,      200),\n      campaign_id_first:   cleanStr(attrFirst.campaignId,  100),\n      utm_source_last:     cleanStr(attrLast.utmSource,    200),\n      utm_medium_last:     cleanStr(attrLast.utmMedium,    200),\n      utm_campaign_last:   cleanStr(attrLast.utmCampaign,  200),\n      utm_content_last:    cleanStr(attrLast.utmContent,   200),\n      landing_url_last:    cleanStr(attrLast.url,          2048),\n      ghl_created_at:      parseISODate(c.dateAdded  || c.createdAt),\n      ghl_updated_at:      parseISODate(c.dateUpdated || c.updatedAt),\n      synced_at:           new Date().toISOString()\n    };\n  });\n\nreturn [{ json: { location_id, contacts: cleaned, next_cursor } }];"
+        "jsCode": "// Sanitizar todos los contactos del batch\nconst REGEX_GHL_ID      = /^[a-zA-Z0-9_-]{8,50}$/;\nconst REGEX_LOCATION_ID = /^[a-zA-Z0-9]{10,30}$/;\nconst REGEX_EMAIL       = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$/;\n\nfunction cleanStr(val, maxLen) {\n  if (!val) return null;\n  const s = String(val).trim().substring(0, maxLen);\n  return s.length > 0 ? s : null;\n}\nfunction normalizeE164(raw) {\n  if (!raw) return null;\n  let digits = String(raw).replace(/[^\\d+]/g, '');\n  if (digits.startsWith('+')) { const c = '+' + digits.slice(1); return (c.length >= 8 && c.length <= 16) ? c : null; }\n  if (/^3\\d{9}$/.test(digits)) return '+57' + digits;\n  if (/^57\\d{10}$/.test(digits)) return '+' + digits;\n  if (digits.length >= 7 && digits.length <= 15) return '+' + digits;\n  return null;\n}\nfunction validateEmail(val) {\n  if (!val) return null;\n  const n = String(val).toLowerCase().trim().substring(0, 255);\n  return REGEX_EMAIL.test(n) ? n : null;\n}\nfunction parseISODate(val) {\n  if (!val) return null;\n  const ts = Date.parse(String(val));\n  return isNaN(ts) ? null : new Date(ts).toISOString();\n}\n\nconst { location_id, contacts, next_cursor } = $input.first().json;\n\nconst cleaned = contacts\n  .filter(c => {\n    const cid = String(c.id || '').trim();\n    const lid = String(c.locationId || '').trim();\n    return REGEX_GHL_ID.test(cid) && REGEX_LOCATION_ID.test(lid);\n  })\n  .map(c => {\n    const attrFirst = c.attributionSource || {};\n    const attrLast  = c.lastAttributionSource || {};\n    return {\n      contact_id:          String(c.id).trim(),\n      location_id:         String(c.locationId).trim(),\n      email:               validateEmail(c.email),\n      phone:               normalizeE164(c.phone),\n      first_name:          cleanStr(c.firstName, 100),\n      last_name:           cleanStr(c.lastName,  100),\n      source:              cleanStr(c.source, 100),\n      tags:                Array.isArray(c.tags) ? c.tags.slice(0, 200).map(t => String(t).trim().substring(0, 200)) : null,\n      contact_type:        cleanStr(c.contactType || c.type, 50),\n      dnd:                 c.dnd === true || c.dnd === 'true',\n      custom_fields:       (c.customFields && typeof c.customFields === 'object') ? c.customFields : null,\n      utm_source_first:    cleanStr(attrFirst.utmSource, 200),\n      utm_medium_first:    cleanStr(attrFirst.utmMedium, 200),\n      utm_campaign_first:  cleanStr(attrFirst.utmCampaign, 200),\n      utm_content_first:   cleanStr(attrFirst.utmContent,  200),\n      utm_term_first:      cleanStr(attrFirst.utmTerm,     200),\n      landing_url_first:   cleanStr(attrFirst.url,         2048),\n      referrer_first:      cleanStr(attrFirst.referrer,    2048),\n      gclid_first:         cleanStr(attrFirst.gclid,       200),\n      fbclid_first:        cleanStr(attrFirst.fbclid,      200),\n      campaign_id_first:   cleanStr(attrFirst.campaignId,  100),\n      ad_id_first:         cleanStr(attrFirst.adId,       100),\n      ad_id_last:          cleanStr(attrLast.adId,        100),\n      ctwa_clid_first:     cleanStr(attrFirst.ctwaClid,   500),\n      ctwa_clid_last:      cleanStr(attrLast.ctwaClid,    500),\n      utm_source_last:     cleanStr(attrLast.utmSource,    200),\n      utm_medium_last:     cleanStr(attrLast.utmMedium,    200),\n      utm_campaign_last:   cleanStr(attrLast.utmCampaign,  200),\n      utm_content_last:    cleanStr(attrLast.utmContent,   200),\n      landing_url_last:    cleanStr(attrLast.url,          2048),\n      ghl_created_at:      parseISODate(c.dateAdded  || c.createdAt),\n      ghl_updated_at:      parseISODate(c.dateUpdated || c.updatedAt),\n      synced_at:           new Date().toISOString()\n    };\n  });\n\nreturn [{ json: { location_id, contacts: cleaned, next_cursor } }];"
       }
     },
     {
       "id": "node-06-upsert-loop",
       "name": "SCD2 Upsert Batch",
       "type": "n8n-nodes-base.code",
-      "position": [1340, 300],
+      "position": [
+        1340,
+        300
+      ],
       "parameters": {
         "jsCode": "// Para cada contacto, aplicar SCD2 via SQL parametrizado.\n// Por rendimiento: primero leer todos los existentes en un solo SELECT,\n// luego procesar en memoria y ejecutar las queries necesarias.\n//\n// NOTA: En n8n no hay acceso directo a un pg client desde Code node;\n// se usan nodos Postgres subsiguientes. Este nodo prepara los datos.\n\nconst { location_id, contacts } = $input.first().json;\n\nconst TRACKED = ['email', 'phone', 'source', 'utm_source_first', 'utm_campaign_first'];\nconst now = new Date().toISOString();\n\n// Preparar lista de IDs para busqueda masiva\nconst ids = contacts.map(c => c.contact_id);\n\n// Pasar datos al nodo siguiente para que haga el SELECT masivo\nreturn [{ json: { location_id, contacts, ids, tracked: TRACKED, now } }];"
       }
@@ -68,7 +94,10 @@
       "id": "node-07-fetch-existing",
       "name": "Fetch Versiones Actuales Batch",
       "type": "n8n-nodes-base.postgres",
-      "position": [1560, 300],
+      "position": [
+        1560,
+        300
+      ],
       "parameters": {
         "operation": "executeQuery",
         "query": "SELECT surrogate_key, contact_id, email, phone, source, utm_source_first, utm_campaign_first, tags, custom_fields, ghl_updated_at FROM dim_contacts WHERE contact_id = ANY($1::varchar[]) AND is_current = TRUE",
@@ -77,14 +106,20 @@
         }
       },
       "credentials": {
-        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+        "postgres": {
+          "id": "postgres-n8n-writer",
+          "name": "Postgres n8n_writer"
+        }
       }
     },
     {
       "id": "node-08-apply-scd2",
       "name": "Aplicar SCD2 y Preparar SQL",
       "type": "n8n-nodes-base.code",
-      "position": [1780, 300],
+      "position": [
+        1780,
+        300
+      ],
       "parameters": {
         "jsCode": "// Comparar incoming vs existing y generar acciones SCD2\nconst state = $('SCD2 Upsert Batch').first().json;\nconst existingRows = $input.first().json;  // filas del SELECT\n\nconst { contacts, tracked, now } = state;\n\n// Indexar por contact_id\nconst existingMap = {};\nconst rows = Array.isArray(existingRows) ? existingRows : (existingRows.data || [existingRows]);\nfor (const row of rows) {\n  if (row && row.contact_id) existingMap[row.contact_id] = row;\n}\n\nconst inserts       = [];\nconst scdUpdates    = [];  // { close_surrogate, close_valid_to, record }\nconst minorUpdates  = [];  // { surrogate_key, synced_at, tags, custom_fields }\n\nfor (const incoming of contacts) {\n  const prev = existingMap[incoming.contact_id];\n\n  if (!prev) {\n    inserts.push(Object.assign({}, incoming, { valid_from: now, valid_to: null, is_current: true, change_reason: 'initial_insert' }));\n    continue;\n  }\n\n  const changedFields = tracked.filter(f => String(prev[f] ?? null) !== String(incoming[f] ?? null));\n\n  if (changedFields.length > 0) {\n    scdUpdates.push({\n      close_surrogate: prev.surrogate_key,\n      close_valid_to:  now,\n      record: Object.assign({}, incoming, { valid_from: now, valid_to: null, is_current: true, change_reason: changedFields.map(f => f + '_change').join(', ') })\n    });\n  } else {\n    minorUpdates.push({\n      surrogate_key: prev.surrogate_key,\n      synced_at:     now,\n      ghl_updated_at: incoming.ghl_updated_at || now,\n      tags:          incoming.tags,\n      custom_fields: incoming.custom_fields\n    });\n  }\n}\n\nreturn [{ json: { inserts, scdUpdates, minorUpdates, location_id: state.location_id, next_cursor: state.next_cursor, total: contacts.length } }];"
       }
@@ -93,23 +128,32 @@
       "id": "node-09-exec-inserts",
       "name": "Ejecutar INSERTs Nuevos",
       "type": "n8n-nodes-base.postgres",
-      "position": [2000, 220],
+      "position": [
+        2000,
+        220
+      ],
       "parameters": {
         "operation": "executeQuery",
-        "query": "={{ $json.inserts.length > 0 ? 'INSERT INTO dim_contacts (contact_id, location_id, email, phone, first_name, last_name, source, tags, contact_type, dnd, custom_fields, utm_source_first, utm_medium_first, utm_campaign_first, utm_content_first, utm_term_first, landing_url_first, referrer_first, gclid_first, fbclid_first, campaign_id_first, utm_source_last, utm_medium_last, utm_campaign_last, utm_content_last, landing_url_last, valid_from, valid_to, is_current, change_reason, ghl_created_at, ghl_updated_at, synced_at) SELECT r.* FROM jsonb_to_recordset($1::jsonb) AS r(contact_id varchar,location_id varchar,email varchar,phone varchar,first_name varchar,last_name varchar,source varchar,tags text[],contact_type varchar,dnd boolean,custom_fields jsonb,utm_source_first varchar,utm_medium_first varchar,utm_campaign_first varchar,utm_content_first varchar,utm_term_first varchar,landing_url_first text,referrer_first text,gclid_first varchar,fbclid_first varchar,campaign_id_first varchar,utm_source_last varchar,utm_medium_last varchar,utm_campaign_last varchar,utm_content_last varchar,landing_url_last text,valid_from timestamptz,valid_to timestamptz,is_current boolean,change_reason varchar,ghl_created_at timestamptz,ghl_updated_at timestamptz,synced_at timestamptz) ON CONFLICT DO NOTHING' : 'SELECT 1' }}",
+        "query": "={{ $json.inserts.length > 0 ? 'INSERT INTO dim_contacts (contact_id, location_id, email, phone, first_name, last_name, source, tags, contact_type, dnd, custom_fields, utm_source_first, utm_medium_first, utm_campaign_first, utm_content_first, utm_term_first, landing_url_first, referrer_first, gclid_first, fbclid_first, campaign_id_first, utm_source_last, utm_medium_last, utm_campaign_last, utm_content_last, landing_url_last, ad_id_first, ad_id_last, ctwa_clid_first, ctwa_clid_last, valid_from, valid_to, is_current, change_reason, ghl_created_at, ghl_updated_at, synced_at) SELECT r.* FROM jsonb_to_recordset($1::jsonb) AS r(contact_id varchar,location_id varchar,email varchar,phone varchar,first_name varchar,last_name varchar,source varchar,tags text[],contact_type varchar,dnd boolean,custom_fields jsonb,utm_source_first varchar,utm_medium_first varchar,utm_campaign_first varchar,utm_content_first varchar,utm_term_first varchar,landing_url_first text,referrer_first text,gclid_first varchar,fbclid_first varchar,campaign_id_first varchar,utm_source_last varchar,utm_medium_last varchar,utm_campaign_last varchar,utm_content_last varchar,landing_url_last text,ad_id_first varchar,ad_id_last varchar,ctwa_clid_first varchar,ctwa_clid_last varchar,valid_from timestamptz,valid_to timestamptz,is_current boolean,change_reason varchar,ghl_created_at timestamptz,ghl_updated_at timestamptz,synced_at timestamptz) ON CONFLICT DO NOTHING' : 'SELECT 1' }}",
         "additionalFields": {
           "queryParams": "={{ $json.inserts.length > 0 ? [JSON.stringify($json.inserts)] : [] }}"
         }
       },
       "credentials": {
-        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+        "postgres": {
+          "id": "postgres-n8n-writer",
+          "name": "Postgres n8n_writer"
+        }
       }
     },
     {
       "id": "node-10-exec-scd",
       "name": "Ejecutar SCD2 Updates",
       "type": "n8n-nodes-base.code",
-      "position": [2000, 380],
+      "position": [
+        2000,
+        380
+      ],
       "parameters": {
         "jsCode": "// Ejecutar SCD2 updates via Postgres nodo (limitacion: Code node no ejecuta SQL directo).\n// Este nodo prepara los datos; el nodo Postgres siguiente los ejecuta.\n// Por limitaciones de n8n, se procesan en el mismo nodo usando HTTP a Postgres REST si disponible,\n// o se usa el patron de pasar datos al siguiente nodo Postgres.\n// DECISION: pasar al nodo siguiente los scdUpdates para procesamiento.\nreturn $input.all();"
       }
@@ -118,7 +162,10 @@
       "id": "node-11-update-cursor",
       "name": "Actualizar ghl_sync_state",
       "type": "n8n-nodes-base.postgres",
-      "position": [2220, 300],
+      "position": [
+        2220,
+        300
+      ],
       "parameters": {
         "operation": "executeQuery",
         "query": "UPDATE ghl_sync_state SET last_synced_at = NOW(), last_cursor = $1, records_synced = records_synced + $2, last_error = NULL, updated_at = NOW() WHERE entity = 'contacts' AND location_id = $3",
@@ -127,40 +174,123 @@
         }
       },
       "credentials": {
-        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+        "postgres": {
+          "id": "postgres-n8n-writer",
+          "name": "Postgres n8n_writer"
+        }
       }
     }
   ],
   "connections": {
     "Cron cada 60 min": {
-      "main": [[{ "node": "Expandir Location IDs", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Expandir Location IDs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Expandir Location IDs": {
-      "main": [[{ "node": "Leer Cursor ghl_sync_state", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Leer Cursor ghl_sync_state",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Leer Cursor ghl_sync_state": {
-      "main": [[{ "node": "Fetch Pagina GHL API Contacts", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Fetch Pagina GHL API Contacts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Fetch Pagina GHL API Contacts": {
-      "main": [[{ "node": "Sanitizar Batch Contactos", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Sanitizar Batch Contactos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Sanitizar Batch Contactos": {
-      "main": [[{ "node": "SCD2 Upsert Batch", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "SCD2 Upsert Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "SCD2 Upsert Batch": {
-      "main": [[{ "node": "Fetch Versiones Actuales Batch", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Fetch Versiones Actuales Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Fetch Versiones Actuales Batch": {
-      "main": [[{ "node": "Aplicar SCD2 y Preparar SQL", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Aplicar SCD2 y Preparar SQL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Aplicar SCD2 y Preparar SQL": {
-      "main": [[{ "node": "Ejecutar INSERTs Nuevos", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Ejecutar INSERTs Nuevos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Ejecutar INSERTs Nuevos": {
-      "main": [[{ "node": "Ejecutar SCD2 Updates", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Ejecutar SCD2 Updates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Ejecutar SCD2 Updates": {
-      "main": [[{ "node": "Actualizar ghl_sync_state", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Actualizar ghl_sync_state",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "settings": {

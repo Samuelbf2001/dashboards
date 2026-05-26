@@ -29,7 +29,9 @@ CREATE TABLE IF NOT EXISTS dim_pipelines (
   -- Subaccount GHL — RLS
   location_id   VARCHAR(50)      NOT NULL,
 
-  synced_at     TIMESTAMPTZ      NOT NULL DEFAULT NOW()
+  synced_at     TIMESTAMPTZ      NOT NULL DEFAULT NOW(),
+
+  CONSTRAINT uq_dim_pipelines_stage_location UNIQUE (pipeline_id, stage_id, location_id)
 );
 
 COMMENT ON TABLE dim_pipelines IS

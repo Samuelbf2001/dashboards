@@ -5,7 +5,10 @@
       "id": "node-01-webhook",
       "name": "Webhook GHL Contactos",
       "type": "n8n-nodes-base.webhook",
-      "position": [240, 300],
+      "position": [
+        240,
+        300
+      ],
       "parameters": {
         "path": "ghl/contacts",
         "httpMethod": "POST",
@@ -19,7 +22,10 @@
       "id": "node-02-hmac",
       "name": "Validar HMAC GHL",
       "type": "n8n-nodes-base.code",
-      "position": [460, 300],
+      "position": [
+        460,
+        300
+      ],
       "parameters": {
         "jsCode": "// Validar firma HMAC-SHA256 del webhook de GHL (SEC-05)\nconst crypto = require('crypto');\n\nconst rawBody   = $input.first().binary?.data\n  ? Buffer.from($input.first().binary.data, 'base64').toString('utf8')\n  : JSON.stringify($input.first().json);\n\nconst sigHeader = $input.first().headers['x-ghl-signature'] || '';\nconst secret    = $env.WEBHOOK_SECRET;\n\nif (!secret) throw new Error('WEBHOOK_SECRET no configurado');\n\nif (!sigHeader) {\n  $node['Respuesta 401'].json = { error: 'Firma ausente' };\n  throw new Error('HMAC: header X-GHL-Signature ausente');\n}\n\nconst receivedHex = sigHeader.startsWith('sha256=') ? sigHeader.slice(7) : sigHeader;\nconst receivedBuf = Buffer.from(receivedHex, 'hex');\n\nconst hmac = crypto.createHmac('sha256', secret);\nhmac.update(rawBody);\nconst expectedBuf = Buffer.from(hmac.digest('hex'), 'hex');\n\nif (receivedBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(receivedBuf, expectedBuf)) {\n  throw new Error('HMAC: firma invalida — rechazando webhook');\n}\n\nreturn $input.all();"
       }
@@ -28,16 +34,22 @@
       "id": "node-03-sanitize",
       "name": "Sanitizar Contacto",
       "type": "n8n-nodes-base.code",
-      "position": [680, 300],
+      "position": [
+        680,
+        300
+      ],
       "parameters": {
-        "jsCode": "// Sanitizar payload del contacto (SEC-06, ETL-08, ETL-09, ETL-10)\n// Funciones copiadas de n8n/lib/sanitize.js\n\nconst REGEX_GHL_ID      = /^[a-zA-Z0-9_-]{8,50}$/;\nconst REGEX_LOCATION_ID = /^[a-zA-Z0-9]{10,30}$/;\nconst REGEX_EMAIL       = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$/;\n\nfunction cleanStr(val, maxLen) {\n  if (val === null || val === undefined) return null;\n  const s = String(val).trim().substring(0, maxLen);\n  return s.length > 0 ? s : null;\n}\n\nfunction normalizeE164(raw) {\n  if (!raw) return null;\n  let digits = String(raw).replace(/[^\\d+]/g, '');\n  if (digits.startsWith('+')) {\n    const clean = '+' + digits.slice(1).replace(/\\D/g, '');\n    return (clean.length >= 8 && clean.length <= 16) ? clean : null;\n  }\n  if (/^3\\d{9}$/.test(digits)) return '+57' + digits;\n  if (/^57\\d{10}$/.test(digits)) return '+' + digits;\n  if (digits.length >= 7 && digits.length <= 15) return '+' + digits;\n  return null;\n}\n\nfunction validateEmail(val) {\n  if (!val) return null;\n  const n = String(val).toLowerCase().trim().substring(0, 255);\n  return REGEX_EMAIL.test(n) ? n : null;\n}\n\nfunction parseISODate(val) {\n  if (!val) return null;\n  const ts = Date.parse(String(val));\n  return isNaN(ts) ? null : new Date(ts).toISOString();\n}\n\nconst raw = $input.first().json;\nconst body = raw.body || raw;\n\nconst contact_id  = REGEX_GHL_ID.test(String(body.id || body.contactId || '').trim())\n  ? String(body.id || body.contactId).trim() : null;\nconst location_id = REGEX_LOCATION_ID.test(String(body.locationId || '').trim())\n  ? String(body.locationId).trim() : null;\n\nif (!contact_id)  throw new Error('contact_id invalido: ' + (body.id || body.contactId));\nif (!location_id) throw new Error('location_id invalido: ' + body.locationId);\n\nconst attrFirst = body.attributionSource || {};\nconst attrLast  = body.lastAttributionSource || {};\n\nconst clean = {\n  contact_id,\n  location_id,\n  email:              validateEmail(body.email),\n  phone:              normalizeE164(body.phone),\n  first_name:         cleanStr(body.firstName  || body.first_name,  100),\n  last_name:          cleanStr(body.lastName   || body.last_name,   100),\n  source:             cleanStr(body.source, 100),\n  tags:               Array.isArray(body.tags) ? body.tags.slice(0, 200).map(t => String(t).trim().substring(0, 200)) : null,\n  contact_type:       cleanStr(body.contactType || body.type, 50),\n  dnd:                body.dnd === true || body.dnd === 'true',\n  custom_fields:      (body.customFields && typeof body.customFields === 'object') ? body.customFields : null,\n  utm_source_first:   cleanStr(attrFirst.utmSource   || body.utm_source_first,   200),\n  utm_medium_first:   cleanStr(attrFirst.utmMedium   || body.utm_medium_first,   200),\n  utm_campaign_first: cleanStr(attrFirst.utmCampaign || body.utm_campaign_first, 200),\n  utm_content_first:  cleanStr(attrFirst.utmContent  || body.utm_content_first,  200),\n  utm_term_first:     cleanStr(attrFirst.utmTerm     || body.utm_term_first,     200),\n  landing_url_first:  cleanStr(attrFirst.url         || body.landing_url_first,  2048),\n  referrer_first:     cleanStr(attrFirst.referrer    || body.referrer_first,     2048),\n  gclid_first:        cleanStr(attrFirst.gclid       || body.gclid_first,        200),\n  fbclid_first:       cleanStr(attrFirst.fbclid      || body.fbclid_first,       200),\n  campaign_id_first:  cleanStr(attrFirst.campaignId  || body.campaign_id_first,  100),\n  utm_source_last:    cleanStr(attrLast.utmSource    || body.utm_source_last,    200),\n  utm_medium_last:    cleanStr(attrLast.utmMedium    || body.utm_medium_last,    200),\n  utm_campaign_last:  cleanStr(attrLast.utmCampaign  || body.utm_campaign_last,  200),\n  utm_content_last:   cleanStr(attrLast.utmContent   || body.utm_content_last,   200),\n  landing_url_last:   cleanStr(attrLast.url          || body.landing_url_last,   2048),\n  ghl_created_at:     parseISODate(body.dateAdded    || body.createdAt),\n  ghl_updated_at:     parseISODate(body.dateUpdated  || body.updatedAt),\n  synced_at:          new Date().toISOString()\n};\n\nreturn [{ json: clean }];"
+        "jsCode": "// Sanitizar payload del contacto (SEC-06, ETL-08, ETL-09, ETL-10)\n// Funciones copiadas de n8n/lib/sanitize.js\n\nconst REGEX_GHL_ID      = /^[a-zA-Z0-9_-]{8,50}$/;\nconst REGEX_LOCATION_ID = /^[a-zA-Z0-9]{10,30}$/;\nconst REGEX_EMAIL       = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$/;\n\nfunction cleanStr(val, maxLen) {\n  if (val === null || val === undefined) return null;\n  const s = String(val).trim().substring(0, maxLen);\n  return s.length > 0 ? s : null;\n}\n\nfunction normalizeE164(raw) {\n  if (!raw) return null;\n  let digits = String(raw).replace(/[^\\d+]/g, '');\n  if (digits.startsWith('+')) {\n    const clean = '+' + digits.slice(1).replace(/\\D/g, '');\n    return (clean.length >= 8 && clean.length <= 16) ? clean : null;\n  }\n  if (/^3\\d{9}$/.test(digits)) return '+57' + digits;\n  if (/^57\\d{10}$/.test(digits)) return '+' + digits;\n  if (digits.length >= 7 && digits.length <= 15) return '+' + digits;\n  return null;\n}\n\nfunction validateEmail(val) {\n  if (!val) return null;\n  const n = String(val).toLowerCase().trim().substring(0, 255);\n  return REGEX_EMAIL.test(n) ? n : null;\n}\n\nfunction parseISODate(val) {\n  if (!val) return null;\n  const ts = Date.parse(String(val));\n  return isNaN(ts) ? null : new Date(ts).toISOString();\n}\n\nconst raw = $input.first().json;\nconst body = raw.body || raw;\n\nconst contact_id  = REGEX_GHL_ID.test(String(body.id || body.contactId || '').trim())\n  ? String(body.id || body.contactId).trim() : null;\nconst location_id = REGEX_LOCATION_ID.test(String(body.locationId || '').trim())\n  ? String(body.locationId).trim() : null;\n\nif (!contact_id)  throw new Error('contact_id invalido: ' + (body.id || body.contactId));\nif (!location_id) throw new Error('location_id invalido: ' + body.locationId);\n\nconst attrFirst = body.attributionSource || {};\nconst attrLast  = body.lastAttributionSource || {};\n\nconst clean = {\n  contact_id,\n  location_id,\n  email:              validateEmail(body.email),\n  phone:              normalizeE164(body.phone),\n  first_name:         cleanStr(body.firstName  || body.first_name,  100),\n  last_name:          cleanStr(body.lastName   || body.last_name,   100),\n  source:             cleanStr(body.source, 100),\n  tags:               Array.isArray(body.tags) ? body.tags.slice(0, 200).map(t => String(t).trim().substring(0, 200)) : null,\n  contact_type:       cleanStr(body.contactType || body.type, 50),\n  dnd:                body.dnd === true || body.dnd === 'true',\n  custom_fields:      (body.customFields && typeof body.customFields === 'object') ? body.customFields : null,\n  utm_source_first:   cleanStr(attrFirst.utmSource   || body.utm_source_first,   200),\n  utm_medium_first:   cleanStr(attrFirst.utmMedium   || body.utm_medium_first,   200),\n  utm_campaign_first: cleanStr(attrFirst.utmCampaign || body.utm_campaign_first, 200),\n  utm_content_first:  cleanStr(attrFirst.utmContent  || body.utm_content_first,  200),\n  utm_term_first:     cleanStr(attrFirst.utmTerm     || body.utm_term_first,     200),\n  landing_url_first:  cleanStr(attrFirst.url         || body.landing_url_first,  2048),\n  referrer_first:     cleanStr(attrFirst.referrer    || body.referrer_first,     2048),\n  gclid_first:        cleanStr(attrFirst.gclid       || body.gclid_first,        200),\n  fbclid_first:       cleanStr(attrFirst.fbclid      || body.fbclid_first,       200),\n  campaign_id_first:  cleanStr(attrFirst.campaignId  || body.campaign_id_first,  100),\n  utm_source_last:    cleanStr(attrLast.utmSource    || body.utm_source_last,    200),\n  utm_medium_last:    cleanStr(attrLast.utmMedium    || body.utm_medium_last,    200),\n  utm_campaign_last:  cleanStr(attrLast.utmCampaign  || body.utm_campaign_last,  200),\n  utm_content_last:   cleanStr(attrLast.utmContent   || body.utm_content_last,   200),\n  landing_url_last:   cleanStr(attrLast.url          || body.landing_url_last,   2048),\n  ad_id_first:        cleanStr(attrFirst.adId        || body.ad_id_first,        100),\n  ad_id_last:         cleanStr(attrLast.adId         || body.ad_id_last,         100),\n  ctwa_clid_first:    cleanStr(attrFirst.ctwaClid    || body.ctwa_clid_first,    500),\n  ctwa_clid_last:     cleanStr(attrLast.ctwaClid     || body.ctwa_clid_last,     500),\n  ghl_created_at:     parseISODate(body.dateAdded    || body.createdAt),\n  ghl_updated_at:     parseISODate(body.dateUpdated  || body.updatedAt),\n  synced_at:          new Date().toISOString()\n};\n\nreturn [{ json: clean }];"
       }
     },
     {
       "id": "node-04-scd2-check",
       "name": "Verificar SCD2 dim_contacts",
       "type": "n8n-nodes-base.postgres",
-      "position": [900, 300],
+      "position": [
+        900,
+        300
+      ],
       "parameters": {
         "operation": "executeQuery",
         "query": "SELECT surrogate_key, contact_id, email, phone, source, utm_source_first, utm_campaign_first, tags, custom_fields, ghl_updated_at FROM dim_contacts WHERE contact_id = $1 AND is_current = TRUE LIMIT 1",
@@ -56,7 +68,10 @@
       "id": "node-05-scd2-logic",
       "name": "Logica SCD2",
       "type": "n8n-nodes-base.code",
-      "position": [1120, 300],
+      "position": [
+        1120,
+        300
+      ],
       "parameters": {
         "jsCode": "// Aplicar logica SCD Tipo 2 para dim_contacts\n// Referencia: GHL_Database.txt seccion 'Logica SCD Tipo 2'\n\nconst TRACKED = ['email', 'phone', 'source', 'utm_source_first', 'utm_campaign_first'];\n\nconst incoming = $('Sanitizar Contacto').first().json;\nconst existing = $input.first().json;  // resultado del SELECT previo\n\nconst now = new Date().toISOString();\n\n// Si no hay fila existente → INSERT inicial\nif (!existing || !existing.surrogate_key) {\n  return [{\n    json: {\n      action: 'INSERT',\n      record: Object.assign({}, incoming, {\n        valid_from:    now,\n        valid_to:      null,\n        is_current:    true,\n        change_reason: 'initial_insert'\n      })\n    }\n  }];\n}\n\n// Detectar cambios en campos rastreados\nconst changedFields = TRACKED.filter(f => {\n  const prevVal = existing[f] === undefined ? null : existing[f];\n  const newVal  = incoming[f] === undefined ? null  : incoming[f];\n  return String(prevVal) !== String(newVal);\n});\n\nif (changedFields.length > 0) {\n  return [{\n    json: {\n      action:             'SCD_UPDATE',\n      close_surrogate:    existing.surrogate_key,\n      close_valid_to:     now,\n      record:             Object.assign({}, incoming, {\n        valid_from:    now,\n        valid_to:      null,\n        is_current:    true,\n        change_reason: changedFields.map(f => f + '_change').join(', ')\n      })\n    }\n  }];\n}\n\n// Sin cambios → actualizar minor\nreturn [{\n  json: {\n    action:         'UPDATE_MINOR',\n    surrogate_key:  existing.surrogate_key,\n    synced_at:      now,\n    ghl_updated_at: incoming.ghl_updated_at || now,\n    tags:           incoming.tags,\n    custom_fields:  incoming.custom_fields\n  }\n}];"
       }
@@ -65,15 +80,48 @@
       "id": "node-06-branch",
       "name": "Rama por Accion SCD2",
       "type": "n8n-nodes-base.switch",
-      "position": [1340, 300],
+      "position": [
+        1340,
+        300
+      ],
       "parameters": {
         "mode": "expression",
         "output": "={{ $json.action }}",
         "rules": {
           "values": [
-            { "conditions": { "string": [{ "value1": "={{ $json.action }}", "operation": "equal", "value2": "INSERT" }] } },
-            { "conditions": { "string": [{ "value1": "={{ $json.action }}", "operation": "equal", "value2": "SCD_UPDATE" }] } },
-            { "conditions": { "string": [{ "value1": "={{ $json.action }}", "operation": "equal", "value2": "UPDATE_MINOR" }] } }
+            {
+              "conditions": {
+                "string": [
+                  {
+                    "value1": "={{ $json.action }}",
+                    "operation": "equal",
+                    "value2": "INSERT"
+                  }
+                ]
+              }
+            },
+            {
+              "conditions": {
+                "string": [
+                  {
+                    "value1": "={{ $json.action }}",
+                    "operation": "equal",
+                    "value2": "SCD_UPDATE"
+                  }
+                ]
+              }
+            },
+            {
+              "conditions": {
+                "string": [
+                  {
+                    "value1": "={{ $json.action }}",
+                    "operation": "equal",
+                    "value2": "UPDATE_MINOR"
+                  }
+                ]
+              }
+            }
           ]
         }
       }
@@ -82,12 +130,15 @@
       "id": "node-07-insert",
       "name": "INSERT dim_contacts",
       "type": "n8n-nodes-base.postgres",
-      "position": [1560, 160],
+      "position": [
+        1560,
+        160
+      ],
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO dim_contacts (contact_id, location_id, email, phone, first_name, last_name, source, tags, contact_type, dnd, custom_fields, utm_source_first, utm_medium_first, utm_campaign_first, utm_content_first, utm_term_first, landing_url_first, referrer_first, gclid_first, fbclid_first, campaign_id_first, utm_source_last, utm_medium_last, utm_campaign_last, utm_content_last, landing_url_last, valid_from, valid_to, is_current, change_reason, ghl_created_at, ghl_updated_at, synced_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33)",
+        "query": "INSERT INTO dim_contacts (contact_id, location_id, email, phone, first_name, last_name, source, tags, contact_type, dnd, custom_fields, utm_source_first, utm_medium_first, utm_campaign_first, utm_content_first, utm_term_first, landing_url_first, referrer_first, gclid_first, fbclid_first, campaign_id_first, utm_source_last, utm_medium_last, utm_campaign_last, utm_content_last, landing_url_last, ad_id_first, ad_id_last, ctwa_clid_first, ctwa_clid_last, valid_from, valid_to, is_current, change_reason, ghl_created_at, ghl_updated_at, synced_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37)",
         "additionalFields": {
-          "queryParams": "={{ [ $json.record.contact_id, $json.record.location_id, $json.record.email, $json.record.phone, $json.record.first_name, $json.record.last_name, $json.record.source, $json.record.tags, $json.record.contact_type, $json.record.dnd, JSON.stringify($json.record.custom_fields), $json.record.utm_source_first, $json.record.utm_medium_first, $json.record.utm_campaign_first, $json.record.utm_content_first, $json.record.utm_term_first, $json.record.landing_url_first, $json.record.referrer_first, $json.record.gclid_first, $json.record.fbclid_first, $json.record.campaign_id_first, $json.record.utm_source_last, $json.record.utm_medium_last, $json.record.utm_campaign_last, $json.record.utm_content_last, $json.record.landing_url_last, $json.record.valid_from, $json.record.valid_to, $json.record.is_current, $json.record.change_reason, $json.record.ghl_created_at, $json.record.ghl_updated_at, $json.record.synced_at ] }}"
+          "queryParams": "={{ [ $json.record.contact_id, $json.record.location_id, $json.record.email, $json.record.phone, $json.record.first_name, $json.record.last_name, $json.record.source, $json.record.tags, $json.record.contact_type, $json.record.dnd, JSON.stringify($json.record.custom_fields), $json.record.utm_source_first, $json.record.utm_medium_first, $json.record.utm_campaign_first, $json.record.utm_content_first, $json.record.utm_term_first, $json.record.landing_url_first, $json.record.referrer_first, $json.record.gclid_first, $json.record.fbclid_first, $json.record.campaign_id_first, $json.record.utm_source_last, $json.record.utm_medium_last, $json.record.utm_campaign_last, $json.record.utm_content_last, $json.record.landing_url_last, $json.record.ad_id_first, $json.record.ad_id_last, $json.record.ctwa_clid_first, $json.record.ctwa_clid_last, $json.record.valid_from, $json.record.valid_to, $json.record.is_current, $json.record.change_reason, $json.record.ghl_created_at, $json.record.ghl_updated_at, $json.record.synced_at ] }}"
         }
       },
       "credentials": {
@@ -101,7 +152,10 @@
       "id": "node-08-scd-close",
       "name": "SCD2 Cerrar Version Anterior",
       "type": "n8n-nodes-base.postgres",
-      "position": [1560, 300],
+      "position": [
+        1560,
+        300
+      ],
       "parameters": {
         "operation": "executeQuery",
         "query": "UPDATE dim_contacts SET valid_to = $1, is_current = FALSE WHERE surrogate_key = $2",
@@ -120,12 +174,15 @@
       "id": "node-09-scd-insert",
       "name": "SCD2 INSERT Nueva Version",
       "type": "n8n-nodes-base.postgres",
-      "position": [1780, 300],
+      "position": [
+        1780,
+        300
+      ],
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO dim_contacts (contact_id, location_id, email, phone, first_name, last_name, source, tags, contact_type, dnd, custom_fields, utm_source_first, utm_medium_first, utm_campaign_first, utm_content_first, utm_term_first, landing_url_first, referrer_first, gclid_first, fbclid_first, campaign_id_first, utm_source_last, utm_medium_last, utm_campaign_last, utm_content_last, landing_url_last, valid_from, valid_to, is_current, change_reason, ghl_created_at, ghl_updated_at, synced_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33)",
+        "query": "INSERT INTO dim_contacts (contact_id, location_id, email, phone, first_name, last_name, source, tags, contact_type, dnd, custom_fields, utm_source_first, utm_medium_first, utm_campaign_first, utm_content_first, utm_term_first, landing_url_first, referrer_first, gclid_first, fbclid_first, campaign_id_first, utm_source_last, utm_medium_last, utm_campaign_last, utm_content_last, landing_url_last, ad_id_first, ad_id_last, ctwa_clid_first, ctwa_clid_last, valid_from, valid_to, is_current, change_reason, ghl_created_at, ghl_updated_at, synced_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37)",
         "additionalFields": {
-          "queryParams": "={{ [ $json.record.contact_id, $json.record.location_id, $json.record.email, $json.record.phone, $json.record.first_name, $json.record.last_name, $json.record.source, $json.record.tags, $json.record.contact_type, $json.record.dnd, JSON.stringify($json.record.custom_fields), $json.record.utm_source_first, $json.record.utm_medium_first, $json.record.utm_campaign_first, $json.record.utm_content_first, $json.record.utm_term_first, $json.record.landing_url_first, $json.record.referrer_first, $json.record.gclid_first, $json.record.fbclid_first, $json.record.campaign_id_first, $json.record.utm_source_last, $json.record.utm_medium_last, $json.record.utm_campaign_last, $json.record.utm_content_last, $json.record.landing_url_last, $json.record.valid_from, $json.record.valid_to, $json.record.is_current, $json.record.change_reason, $json.record.ghl_created_at, $json.record.ghl_updated_at, $json.record.synced_at ] }}"
+          "queryParams": "={{ [ $json.record.contact_id, $json.record.location_id, $json.record.email, $json.record.phone, $json.record.first_name, $json.record.last_name, $json.record.source, $json.record.tags, $json.record.contact_type, $json.record.dnd, JSON.stringify($json.record.custom_fields), $json.record.utm_source_first, $json.record.utm_medium_first, $json.record.utm_campaign_first, $json.record.utm_content_first, $json.record.utm_term_first, $json.record.landing_url_first, $json.record.referrer_first, $json.record.gclid_first, $json.record.fbclid_first, $json.record.campaign_id_first, $json.record.utm_source_last, $json.record.utm_medium_last, $json.record.utm_campaign_last, $json.record.utm_content_last, $json.record.landing_url_last, $json.record.ad_id_first, $json.record.ad_id_last, $json.record.ctwa_clid_first, $json.record.ctwa_clid_last, $json.record.valid_from, $json.record.valid_to, $json.record.is_current, $json.record.change_reason, $json.record.ghl_created_at, $json.record.ghl_updated_at, $json.record.synced_at ] }}"
         }
       },
       "credentials": {
@@ -139,7 +196,10 @@
       "id": "node-10-minor",
       "name": "UPDATE MINOR dim_contacts",
       "type": "n8n-nodes-base.postgres",
-      "position": [1560, 440],
+      "position": [
+        1560,
+        440
+      ],
       "parameters": {
         "operation": "executeQuery",
         "query": "UPDATE dim_contacts SET synced_at = $1, ghl_updated_at = $2, tags = $3, custom_fields = $4 WHERE surrogate_key = $5",
@@ -158,7 +218,10 @@
       "id": "node-11-respond",
       "name": "Responder 200 OK",
       "type": "n8n-nodes-base.respondToWebhook",
-      "position": [2000, 300],
+      "position": [
+        2000,
+        300
+      ],
       "parameters": {
         "respondWith": "json",
         "responseBody": "={ \"status\": \"ok\" }",
@@ -171,7 +234,10 @@
       "id": "node-12-error",
       "name": "Responder 401 Firma Invalida",
       "type": "n8n-nodes-base.respondToWebhook",
-      "position": [460, 480],
+      "position": [
+        460,
+        480
+      ],
       "parameters": {
         "respondWith": "json",
         "responseBody": "={ \"error\": \"Unauthorized\" }",
@@ -184,54 +250,126 @@
   "connections": {
     "Webhook GHL Contactos": {
       "main": [
-        [{ "node": "Validar HMAC GHL", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Validar HMAC GHL",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Validar HMAC GHL": {
       "main": [
-        [{ "node": "Sanitizar Contacto", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Sanitizar Contacto",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Sanitizar Contacto": {
       "main": [
-        [{ "node": "Verificar SCD2 dim_contacts", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Verificar SCD2 dim_contacts",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Verificar SCD2 dim_contacts": {
       "main": [
-        [{ "node": "Logica SCD2", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Logica SCD2",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Logica SCD2": {
       "main": [
-        [{ "node": "Rama por Accion SCD2", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Rama por Accion SCD2",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Rama por Accion SCD2": {
       "main": [
-        [{ "node": "INSERT dim_contacts", "type": "main", "index": 0 }],
-        [{ "node": "SCD2 Cerrar Version Anterior", "type": "main", "index": 0 }],
-        [{ "node": "UPDATE MINOR dim_contacts", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "INSERT dim_contacts",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SCD2 Cerrar Version Anterior",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "UPDATE MINOR dim_contacts",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "SCD2 Cerrar Version Anterior": {
       "main": [
-        [{ "node": "SCD2 INSERT Nueva Version", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "SCD2 INSERT Nueva Version",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "INSERT dim_contacts": {
       "main": [
-        [{ "node": "Responder 200 OK", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Responder 200 OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "SCD2 INSERT Nueva Version": {
       "main": [
-        [{ "node": "Responder 200 OK", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Responder 200 OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "UPDATE MINOR dim_contacts": {
       "main": [
-        [{ "node": "Responder 200 OK", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Responder 200 OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     }
   },

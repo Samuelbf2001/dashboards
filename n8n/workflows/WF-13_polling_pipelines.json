@@ -1,0 +1,98 @@
+{
+  "name": "WF-13 Polling Pipelines",
+  "nodes": [
+    {
+      "id": "node-01-cron",
+      "name": "Cron cada 6 horas",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [240, 300],
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "hours", "hoursInterval": 6 }]
+        }
+      }
+    },
+    {
+      "id": "node-02-locations",
+      "name": "Expandir Location IDs",
+      "type": "n8n-nodes-base.code",
+      "position": [460, 300],
+      "parameters": {
+        "jsCode": "const ids = String($env.GHL_LOCATION_IDS || '').split(',').map(s => s.trim()).filter(Boolean);\nif (ids.length === 0) throw new Error('GHL_LOCATION_IDS no configurado');\nreturn ids.map(location_id => ({ json: { location_id } }));"
+      }
+    },
+    {
+      "id": "node-03-fetch-pipelines",
+      "name": "Fetch Pipelines GHL API",
+      "type": "n8n-nodes-base.code",
+      "position": [680, 300],
+      "parameters": {
+        "jsCode": "// Obtiene todos los pipelines y sus etapas desde GHL API v2.\n// Endpoint: GET /opportunities/pipelines?locationId={id}\nasync function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }\n\nconst location_id = $input.first().json.location_id;\nconst apiKey = $env.GHL_API_KEY;\nif (!apiKey) throw new Error('GHL_API_KEY no configurado');\n\nlet allPipelines = [];\nlet retries = 0;\n\nwhile (retries < 5) {\n  try {\n    const url = new URL('https://services.leadconnectorhq.com/opportunities/pipelines');\n    url.searchParams.set('locationId', location_id);\n\n    const resp = await fetch(url.toString(), {\n      headers: {\n        'Authorization': 'Bearer ' + apiKey,\n        'Version': '2021-07-28',\n        'Content-Type': 'application/json'\n      }\n    });\n\n    if (resp.status === 429) {\n      await sleep(Math.pow(2, retries) * 1000);\n      retries++;\n      continue;\n    }\n\n    if (!resp.ok) throw new Error('GHL API error ' + resp.status + ' pipelines');\n\n    const data = await resp.json();\n    allPipelines = data.pipelines || [];\n    break;\n  } catch (err) {\n    if (retries >= 4) throw err;\n    await sleep(Math.pow(2, retries) * 1000);\n    retries++;\n  }\n}\n\n// Aplanar: una fila por (pipeline, stage)\nconst rows = [];\nfor (const pipeline of allPipelines) {\n  const stages = pipeline.stages || [];\n  stages.sort((a, b) => (a.position || 0) - (b.position || 0));\n  for (let i = 0; i < stages.length; i++) {\n    const stage = stages[i];\n    const stageName = String(stage.name || '').trim();\n    const nameLower = stageName.toLowerCase();\n    rows.push({\n      pipeline_id:   String(pipeline.id || '').trim(),\n      pipeline_name: String(pipeline.name || '').trim().substring(0, 200),\n      stage_id:      String(stage.id || '').trim(),\n      stage_name:    stageName.substring(0, 200),\n      stage_order:   stage.position ?? i,\n      is_won_stage:  nameLower.includes('won') || nameLower.includes('ganado') || nameLower.includes('closed won'),\n      is_lost_stage: nameLower.includes('lost') || nameLower.includes('perdido') || nameLower.includes('closed lost'),\n      location_id,\n      synced_at:     new Date().toISOString()\n    });\n  }\n}\n\nreturn [{ json: { location_id, rows } }];"
+      }
+    },
+    {
+      "id": "node-04-upsert",
+      "name": "Upsert dim_pipelines",
+      "type": "n8n-nodes-base.code",
+      "position": [900, 300],
+      "parameters": {
+        "jsCode": "// Upsert de todas las filas de pipeline en un batch usando la conexión Postgres de n8n.\n// Usa INSERT ... ON CONFLICT DO UPDATE para mantener la dimensión actualizada.\n\nconst { location_id, rows } = $input.first().json;\n\nif (!rows || rows.length === 0) {\n  return [{ json: { location_id, upserted: 0 } }];\n}\n\n// Construir query upsert batch\nconst values = rows.map((r, i) => {\n  const base = i * 9;\n  return `($${base+1}, $${base+2}, $${base+3}, $${base+4}, $${base+5}, $${base+6}, $${base+7}, $${base+8}, $${base+9})`;\n}).join(',\\n');\n\nconst params = rows.flatMap(r => [\n  r.pipeline_id, r.pipeline_name, r.stage_id, r.stage_name,\n  r.stage_order, r.is_won_stage, r.is_lost_stage, r.location_id, r.synced_at\n]);\n\nconst sql = `\nINSERT INTO dim_pipelines\n  (pipeline_id, pipeline_name, stage_id, stage_name, stage_order, is_won_stage, is_lost_stage, location_id, synced_at)\nVALUES ${values}\nON CONFLICT (pipeline_id, stage_id, location_id)\nDO UPDATE SET\n  pipeline_name = EXCLUDED.pipeline_name,\n  stage_name    = EXCLUDED.stage_name,\n  stage_order   = EXCLUDED.stage_order,\n  is_won_stage  = EXCLUDED.is_won_stage,\n  is_lost_stage = EXCLUDED.is_lost_stage,\n  synced_at     = EXCLUDED.synced_at\n`;\n\nreturn [{ json: { sql, params, location_id, count: rows.length } }];"
+      }
+    },
+    {
+      "id": "node-05-pg-upsert",
+      "name": "Ejecutar Upsert Postgres",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1120, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.sql }}",
+        "additionalFields": {
+          "queryParams": "={{ $json.params }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      }
+    },
+    {
+      "id": "node-06-update-cursor",
+      "name": "Actualizar ghl_sync_state",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1340, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ghl_sync_state (entity, location_id, last_synced_at, records_synced, updated_at)\nVALUES ('pipelines', $1, NOW(), $2, NOW())\nON CONFLICT (entity, location_id) DO UPDATE SET\n  last_synced_at = NOW(),\n  records_synced = ghl_sync_state.records_synced + EXCLUDED.records_synced,\n  last_error     = NULL,\n  updated_at     = NOW()",
+        "additionalFields": {
+          "queryParams": "={{ [$('Ejecutar Upsert Postgres').item.json.location_id, $('Upsert dim_pipelines').item.json.count] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+      },
+      "continueOnFail": true
+    }
+  ],
+  "connections": {
+    "Cron cada 6 horas": {
+      "main": [[{ "node": "Expandir Location IDs", "type": "main", "index": 0 }]]
+    },
+    "Expandir Location IDs": {
+      "main": [[{ "node": "Fetch Pipelines GHL API", "type": "main", "index": 0 }]]
+    },
+    "Fetch Pipelines GHL API": {
+      "main": [[{ "node": "Upsert dim_pipelines", "type": "main", "index": 0 }]]
+    },
+    "Upsert dim_pipelines": {
+      "main": [[{ "node": "Ejecutar Upsert Postgres", "type": "main", "index": 0 }]]
+    },
+    "Ejecutar Upsert Postgres": {
+      "main": [[{ "node": "Actualizar ghl_sync_state", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": false
+  }
+}

@@ -1,0 +1,184 @@
+{
+  "id": "WF14PollingConvs1",
+  "name": "WF-14 Polling Conversations",
+  "nodes": [
+    {
+      "id": "node-01-cron",
+      "name": "Cron cada 6h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [240, 300],
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "hours", "hoursInterval": 6 }]
+        }
+      }
+    },
+    {
+      "id": "node-02-locations",
+      "name": "Expandir Location IDs",
+      "type": "n8n-nodes-base.code",
+      "position": [460, 300],
+      "parameters": {
+        "jsCode": "const ids = String($env.GHL_LOCATION_IDS || '').split(',').map(s => s.trim()).filter(Boolean);\nif (ids.length === 0) throw new Error('GHL_LOCATION_IDS no configurado');\nreturn ids.map(location_id => ({ json: { location_id } }));"
+      }
+    },
+    {
+      "id": "node-03-read-cursor",
+      "name": "Leer Cursor ghl_sync_state",
+      "type": "n8n-nodes-base.postgres",
+      "position": [680, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ghl_sync_state (entity, location_id, last_synced_at, records_synced, updated_at) VALUES ('conversations', $1, NULL, 0, NOW()) ON CONFLICT (entity, location_id) DO NOTHING; SELECT entity, location_id, last_synced_at, last_cursor, records_synced FROM ghl_sync_state WHERE entity = 'conversations' AND location_id = $1",
+        "additionalFields": {
+          "queryParams": "={{ [$json.location_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "12QmWggJ2O8TMndR", "name": "Postgres n8n_writer" }
+      }
+    },
+    {
+      "id": "node-04-fetch-convs",
+      "name": "Fetch GHL API Conversations",
+      "type": "n8n-nodes-base.code",
+      "position": [900, 300],
+      "parameters": {
+        "jsCode": "async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }\n\nconst stateRow    = $input.first().json;\nconst location_id = stateRow.location_id;\nconst lastSynced  = stateRow.last_synced_at;\nconst lastCursor  = stateRow.last_cursor;\nconst apiKey      = $env.GHL_API_KEY;\nif (!apiKey) throw new Error('GHL_API_KEY no configurado');\n\nlet allConvs   = [];\nlet startAfter = lastCursor || null;\nlet page = 0;\nconst MAX_PAGES = 300;\n\nwhile (page < MAX_PAGES) {\n  const url = new URL('https://services.leadconnectorhq.com/conversations/search');\n  url.searchParams.set('locationId', location_id);\n  url.searchParams.set('limit', '100');\n  if (lastSynced && !startAfter) url.searchParams.set('startAfterDate', lastSynced);\n  if (startAfter) url.searchParams.set('startAfter', startAfter);\n\n  let resp;\n  let retries = 0;\n  while (retries < 5) {\n    try {\n      resp = await fetch(url.toString(), {\n        headers: { 'Authorization': 'Bearer ' + apiKey, 'Version': '2021-04-15' }\n      });\n      if (resp.status === 429) { await sleep(Math.pow(2, retries) * 1000); retries++; continue; }\n      break;\n    } catch (err) {\n      if (retries >= 4) throw err;\n      await sleep(Math.pow(2, retries) * 1000);\n      retries++;\n    }\n  }\n  if (!resp.ok) throw new Error('GHL API error ' + resp.status + ' conversations page ' + page);\n\n  const data  = await resp.json();\n  const convs = data.conversations || [];\n  allConvs = allConvs.concat(convs);\n\n  startAfter = data.meta?.startAfter || null;\n  if (!startAfter || convs.length === 0) break;\n  page++;\n  await sleep(130);\n}\n\nreturn [{ json: { location_id, conversations: allConvs, next_cursor: startAfter } }];"
+      }
+    },
+    {
+      "id": "node-05-sanitize",
+      "name": "Sanitizar Batch Conversaciones",
+      "type": "n8n-nodes-base.code",
+      "position": [1120, 300],
+      "parameters": {
+        "jsCode": "const REGEX_GHL_ID      = /^[a-zA-Z0-9_-]{8,50}$/;\nconst REGEX_LOCATION_ID = /^[a-zA-Z0-9]{10,30}$/;\nfunction cleanStr(val, maxLen) { if (!val) return null; const s = String(val).trim().substring(0, maxLen); return s.length > 0 ? s : null; }\nfunction validateGHLId(val) { if (!val) return null; const s = String(val).trim(); return REGEX_GHL_ID.test(s) ? s : null; }\nfunction parseISODate(val) { if (!val) return null; const ts = Date.parse(String(val)); return isNaN(ts) ? null : new Date(ts).toISOString(); }\nfunction parseIntSafe(val) { if (val === null || val === undefined || val === '') return null; const n = parseInt(val, 10); return isNaN(n) ? null : n; }\n\nconst { location_id, conversations, next_cursor } = $input.first().json;\n\nconst cleaned = conversations\n  .filter(c => REGEX_GHL_ID.test(String(c.id || '').trim()) && REGEX_LOCATION_ID.test(String(c.locationId || location_id || '').trim()))\n  .map(c => ({\n    conversation_id:     String(c.id).trim(),\n    contact_id:          validateGHLId(c.contactId),\n    location_id:         String(c.locationId || location_id).trim(),\n    channel_type:        cleanStr(c.type || c.channelType, 30),\n    inbox_id:            validateGHLId(c.inboxId),\n    inbox_name:          cleanStr(c.inboxName, 200),\n    assigned_user_id:    validateGHLId(c.userId || c.assignedUserId),\n    assigned_user_name:  cleanStr(c.userName || c.assignedUserName, 200),\n    status:              cleanStr(c.status, 20),\n    unread_count:        parseIntSafe(c.unreadCount) || 0,\n    last_message_at:     parseISODate(c.lastMessageDate || c.lastMessageAt),\n    ghl_created_at:      parseISODate(c.dateAdded || c.createdAt),\n    synced_at:           new Date().toISOString()\n  }))\n  .filter(c => c.contact_id);\n\nreturn [{ json: { location_id, conversations: cleaned, next_cursor, total: cleaned.length } }];"
+      }
+    },
+    {
+      "id": "node-06-upsert-convs",
+      "name": "Upsert dim_conversations",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1340, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.conversations.length > 0 ? 'INSERT INTO dim_conversations (conversation_id, contact_id, location_id, channel_type, inbox_id, inbox_name, assigned_user_id, assigned_user_name, status, unread_count, last_message_at, valid_from, is_current, ghl_created_at, synced_at) SELECT r.conversation_id, r.contact_id, r.location_id, r.channel_type, r.inbox_id, r.inbox_name, r.assigned_user_id, r.assigned_user_name, r.status, r.unread_count, r.last_message_at::timestamptz, NOW(), TRUE, r.ghl_created_at::timestamptz, r.synced_at::timestamptz FROM jsonb_to_recordset($1::jsonb) AS r(conversation_id varchar, contact_id varchar, location_id varchar, channel_type varchar, inbox_id varchar, inbox_name varchar, assigned_user_id varchar, assigned_user_name varchar, status varchar, unread_count int, last_message_at text, ghl_created_at text, synced_at text) ON CONFLICT (conversation_id) WHERE is_current = TRUE DO UPDATE SET status = EXCLUDED.status, unread_count = EXCLUDED.unread_count, last_message_at = EXCLUDED.last_message_at, assigned_user_id = EXCLUDED.assigned_user_id, assigned_user_name = EXCLUDED.assigned_user_name, synced_at = EXCLUDED.synced_at' : 'SELECT 1' }}",
+        "additionalFields": {
+          "queryParams": "={{ $json.conversations.length > 0 ? [JSON.stringify($json.conversations)] : [] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "12QmWggJ2O8TMndR", "name": "Postgres n8n_writer" }
+      }
+    },
+    {
+      "id": "node-07-get-missing-body",
+      "name": "Buscar convs sin first_inbound_body",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1560, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT conversation_id FROM dim_conversations WHERE location_id = $1 AND is_current = TRUE AND first_inbound_body IS NULL ORDER BY ghl_created_at DESC LIMIT 50",
+        "additionalFields": {
+          "queryParams": "={{ [$('Sanitizar Batch Conversaciones').first().json.location_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "12QmWggJ2O8TMndR", "name": "Postgres n8n_writer" }
+      }
+    },
+    {
+      "id": "node-08-fetch-first-msg",
+      "name": "Fetch Primer Mensaje Inbound",
+      "type": "n8n-nodes-base.code",
+      "position": [1780, 300],
+      "parameters": {
+        "jsCode": "// Para cada conversación sin first_inbound_body, llama a la API de mensajes\n// y extrae el primer mensaje inbound (más antiguo).\nasync function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }\n\nconst rows   = Array.isArray($input.all()) ? $input.all().map(i => i.json) : [];\nconst apiKey = $env.GHL_API_KEY;\nif (!apiKey) throw new Error('GHL_API_KEY no configurado');\n\nconst results = [];\n\nfor (const row of rows) {\n  const convId = row.conversation_id;\n  if (!convId) continue;\n\n  try {\n    // GHL devuelve mensajes en orden descendente (más reciente primero).\n    // Pedimos los últimos 100 mensajes y luego paginamos hacia atrás\n    // para llegar al primer inbound. Máximo 5 páginas para no abusar.\n    let firstInbound = null;\n    let lastMsgId    = null;\n    let pagina       = 0;\n    const MAX_PAG    = 5;\n\n    while (pagina < MAX_PAG) {\n      const url = new URL(`https://services.leadconnectorhq.com/conversations/${convId}/messages`);\n      url.searchParams.set('limit', '100');\n      if (lastMsgId) url.searchParams.set('lastMessageId', lastMsgId);\n\n      let resp;\n      let retries = 0;\n      while (retries < 3) {\n        try {\n          resp = await fetch(url.toString(), {\n            headers: { 'Authorization': 'Bearer ' + apiKey, 'Version': '2021-04-15' }\n          });\n          if (resp.status === 429) { await sleep(Math.pow(2, retries) * 1000); retries++; continue; }\n          break;\n        } catch (err) {\n          if (retries >= 2) throw err;\n          await sleep(Math.pow(2, retries) * 1000);\n          retries++;\n        }\n      }\n      if (!resp || !resp.ok) break;\n\n      const data = await resp.json();\n      const msgs = (data.messages?.messages || data.messages || []);\n      if (!Array.isArray(msgs) || msgs.length === 0) break;\n\n      // Filtra inbound y quédate con los que tienen cuerpo de texto\n      const inbounds = msgs.filter(m =>\n        String(m.direction || m.messageDirection || '').toLowerCase() === 'inbound' &&\n        m.body && String(m.body).trim().length > 0\n      );\n\n      // Los mensajes vienen de más reciente a más antiguo.\n      // El más antiguo de esta página es el candidato a primer mensaje.\n      if (inbounds.length > 0) {\n        // Tomamos el último de los inbound en esta página (más antiguo de la página)\n        const candidate = inbounds[inbounds.length - 1];\n        if (!firstInbound) {\n          firstInbound = candidate;\n        } else {\n          // Comparar timestamps para quedarse con el más antiguo\n          const ts1 = Date.parse(firstInbound.dateAdded || firstInbound.createdAt || '');\n          const ts2 = Date.parse(candidate.dateAdded || candidate.createdAt || '');\n          if (!isNaN(ts2) && (isNaN(ts1) || ts2 < ts1)) firstInbound = candidate;\n        }\n      }\n\n      const hasMore = data.messages?.nextPage === true;\n      if (!hasMore) break;\n      lastMsgId = data.messages?.lastMessageId || msgs[msgs.length - 1]?.id || null;\n      if (!lastMsgId) break;\n      pagina++;\n      await sleep(150);\n    }\n\n    if (firstInbound) {\n      const body     = String(firstInbound.body).trim().substring(0, 65535);\n      const sentAt   = firstInbound.dateAdded || firstInbound.createdAt || null;\n      results.push({ json: { conversation_id: convId, first_inbound_body: body, first_inbound_at: sentAt } });\n    }\n  } catch (err) {\n    // Continuar con la siguiente conversación ante errores individuales\n    console.error('Error fetching messages for ' + convId + ': ' + err.message);\n  }\n\n  await sleep(150);\n}\n\nif (results.length === 0) return [{ json: { skipped: true } }];\nreturn results;"
+      }
+    },
+    {
+      "id": "node-09-check-skipped",
+      "name": "Hay mensajes que actualizar?",
+      "type": "n8n-nodes-base.if",
+      "position": [2000, 300],
+      "parameters": {
+        "conditions": {
+          "boolean": [{ "value1": "={{ $json.skipped === true }}", "operation": "equal", "value2": true }]
+        }
+      }
+    },
+    {
+      "id": "node-10-update-first-body",
+      "name": "UPDATE first_inbound_body",
+      "type": "n8n-nodes-base.postgres",
+      "position": [2220, 220],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE dim_conversations SET first_inbound_body = $1, first_inbound_at = CASE WHEN first_inbound_at IS NULL AND $2::text IS NOT NULL THEN $2::timestamptz ELSE first_inbound_at END WHERE conversation_id = $3 AND is_current = TRUE AND first_inbound_body IS NULL",
+        "additionalFields": {
+          "queryParams": "={{ [ $json.first_inbound_body, $json.first_inbound_at, $json.conversation_id ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "12QmWggJ2O8TMndR", "name": "Postgres n8n_writer" }
+      }
+    },
+    {
+      "id": "node-11-update-cursor",
+      "name": "Actualizar ghl_sync_state",
+      "type": "n8n-nodes-base.postgres",
+      "position": [2440, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE ghl_sync_state SET last_synced_at = NOW(), last_cursor = $1, records_synced = records_synced + $2, last_error = NULL, updated_at = NOW() WHERE entity = 'conversations' AND location_id = $3",
+        "additionalFields": {
+          "queryParams": "={{ [ $('Sanitizar Batch Conversaciones').first().json.next_cursor, $('Sanitizar Batch Conversaciones').first().json.total, $('Sanitizar Batch Conversaciones').first().json.location_id ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "12QmWggJ2O8TMndR", "name": "Postgres n8n_writer" }
+      }
+    }
+  ],
+  "connections": {
+    "Cron cada 6h": {
+      "main": [[{ "node": "Expandir Location IDs", "type": "main", "index": 0 }]]
+    },
+    "Expandir Location IDs": {
+      "main": [[{ "node": "Leer Cursor ghl_sync_state", "type": "main", "index": 0 }]]
+    },
+    "Leer Cursor ghl_sync_state": {
+      "main": [[{ "node": "Fetch GHL API Conversations", "type": "main", "index": 0 }]]
+    },
+    "Fetch GHL API Conversations": {
+      "main": [[{ "node": "Sanitizar Batch Conversaciones", "type": "main", "index": 0 }]]
+    },
+    "Sanitizar Batch Conversaciones": {
+      "main": [[{ "node": "Upsert dim_conversations", "type": "main", "index": 0 }]]
+    },
+    "Upsert dim_conversations": {
+      "main": [[{ "node": "Buscar convs sin first_inbound_body", "type": "main", "index": 0 }]]
+    },
+    "Buscar convs sin first_inbound_body": {
+      "main": [[{ "node": "Fetch Primer Mensaje Inbound", "type": "main", "index": 0 }]]
+    },
+    "Fetch Primer Mensaje Inbound": {
+      "main": [[{ "node": "Hay mensajes que actualizar?", "type": "main", "index": 0 }]]
+    },
+    "Hay mensajes que actualizar?": {
+      "main": [
+        [{ "node": "Actualizar ghl_sync_state", "type": "main", "index": 0 }],
+        [{ "node": "UPDATE first_inbound_body", "type": "main", "index": 0 }]
+      ]
+    },
+    "UPDATE first_inbound_body": {
+      "main": [[{ "node": "Actualizar ghl_sync_state", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": false
+  }
+}

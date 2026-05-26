@@ -28,7 +28,7 @@ async function getStats(): Promise<OverviewStats> {
       (SELECT COUNT(*) FROM fact_messages
          WHERE created_at >= CURRENT_DATE)::text                                AS messages_today,
       (SELECT COUNT(*) FROM ghl_appointments
-         WHERE start_time >= CURRENT_DATE AND start_time < CURRENT_DATE + 1)::text AS appointments_today`,
+         WHERE start_time >= CURRENT_DATE AND start_time < CURRENT_DATE + interval '1 day')::text AS appointments_today`,
     [],
     {
       total_locations: '0', total_contacts: '0',
@@ -39,9 +39,16 @@ async function getStats(): Promise<OverviewStats> {
 
 async function getRecentSync(): Promise<SyncRow[]> {
   return safeQueryAll<SyncRow>(
-    `SELECT location_id, last_sync_at, sync_status
+    `SELECT
+       location_id,
+       last_synced_at AS last_sync_at,
+       CASE
+         WHEN last_error IS NOT NULL THEN 'error'
+         WHEN last_synced_at IS NOT NULL THEN 'ok'
+         ELSE 'pending'
+       END AS sync_status
      FROM ghl_sync_state
-     ORDER BY last_sync_at DESC NULLS LAST
+     ORDER BY last_synced_at DESC NULLS LAST
      LIMIT 10`,
     []
   )

@@ -12,7 +12,8 @@ export async function POST(req: NextRequest) {
 
     if (type === 'sync_reset') {
       await query(
-        `UPDATE ghl_sync_state SET last_sync_at = NULL, sync_status = 'pending'
+        `UPDATE ghl_sync_state
+         SET last_synced_at = NULL, last_cursor = NULL, last_error = NULL, updated_at = NOW()
          WHERE location_id = $1`,
         [locationId]
       )

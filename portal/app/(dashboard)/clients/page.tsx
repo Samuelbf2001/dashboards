@@ -19,8 +19,12 @@ async function getClients(): Promise<ClientRow[]> {
        COALESCE(c.cnt, 0)::text          AS contacts,
        COALESCE(o.cnt, 0)::text          AS active_opps,
        COALESCE(m.cnt, 0)::text          AS messages,
-       s.last_sync_at,
-       s.sync_status
+       s.last_synced_at                  AS last_sync_at,
+       CASE
+         WHEN s.last_error IS NOT NULL THEN 'error'
+         WHEN s.last_synced_at IS NOT NULL THEN 'ok'
+         ELSE 'pending'
+       END                               AS sync_status
      FROM ghl_sync_state s
      LEFT JOIN (
        SELECT location_id, COUNT(*) AS cnt FROM dim_contacts WHERE is_current = true GROUP BY 1

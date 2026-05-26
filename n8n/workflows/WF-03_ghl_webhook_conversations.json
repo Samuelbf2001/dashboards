@@ -38,13 +38,13 @@
       "position": [900, 300],
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO dim_conversations (conversation_id, contact_id, location_id, channel_type, inbox_id, inbox_name, assigned_user_id, assigned_user_name, status, unread_count, last_message_at, valid_from, is_current, ghl_created_at, synced_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW(),TRUE,$12,$13) ON CONFLICT DO NOTHING",
+        "query": "INSERT INTO dim_conversations (conversation_id, contact_id, location_id, channel_type, inbox_id, inbox_name, assigned_user_id, assigned_user_name, status, unread_count, last_message_at, valid_from, is_current, ghl_created_at, synced_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW(),TRUE,$12,$13) ON CONFLICT (conversation_id) WHERE is_current = TRUE DO NOTHING",
         "additionalFields": {
           "queryParams": "={{ [ $json.conv.conversation_id, $json.conv.contact_id, $json.conv.location_id, $json.conv.channel_type, $json.conv.inbox_id, $json.conv.inbox_name, $json.conv.assigned_user_id, $json.conv.assigned_user_name, $json.conv.status, $json.conv.unread_count, $json.conv.last_message_at, $json.conv.ghl_created_at, $json.conv.synced_at ] }}"
         }
       },
       "credentials": {
-        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+        "postgres": { "id": "12QmWggJ2O8TMndR", "name": "Postgres n8n_writer" }
       }
     },
     {
@@ -60,7 +60,7 @@
         }
       },
       "credentials": {
-        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+        "postgres": { "id": "12QmWggJ2O8TMndR", "name": "Postgres n8n_writer" }
       }
     },
     {
@@ -96,7 +96,7 @@
         }
       },
       "credentials": {
-        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+        "postgres": { "id": "12QmWggJ2O8TMndR", "name": "Postgres n8n_writer" }
       }
     },
     {
@@ -106,13 +106,13 @@
       "position": [2000, 220],
       "parameters": {
         "operation": "executeQuery",
-        "query": "UPDATE dim_conversations SET first_outbound_at = CASE WHEN first_outbound_at IS NULL AND $1 = 'outbound' THEN $2::timestamptz ELSE first_outbound_at END, first_inbound_at = CASE WHEN first_inbound_at IS NULL AND $1 = 'inbound' THEN $2::timestamptz ELSE first_inbound_at END, first_reply_seconds = CASE WHEN first_inbound_at IS NOT NULL AND (CASE WHEN first_outbound_at IS NULL AND $1 = 'outbound' THEN $2::timestamptz ELSE first_outbound_at END) IS NOT NULL THEN EXTRACT(EPOCH FROM ((CASE WHEN first_outbound_at IS NULL AND $1 = 'outbound' THEN $2::timestamptz ELSE first_outbound_at END) - first_inbound_at))::BIGINT ELSE first_reply_seconds END WHERE conversation_id = $3 AND is_current = TRUE",
+        "query": "UPDATE dim_conversations SET first_outbound_at = CASE WHEN first_outbound_at IS NULL AND $1 = 'outbound' THEN $2::timestamptz ELSE first_outbound_at END, first_inbound_at = CASE WHEN first_inbound_at IS NULL AND $1 = 'inbound' THEN $2::timestamptz ELSE first_inbound_at END, first_inbound_body = CASE WHEN first_inbound_body IS NULL AND $1 = 'inbound' THEN $4 ELSE first_inbound_body END, first_reply_seconds = CASE WHEN first_inbound_at IS NOT NULL AND (CASE WHEN first_outbound_at IS NULL AND $1 = 'outbound' THEN $2::timestamptz ELSE first_outbound_at END) IS NOT NULL THEN EXTRACT(EPOCH FROM ((CASE WHEN first_outbound_at IS NULL AND $1 = 'outbound' THEN $2::timestamptz ELSE first_outbound_at END) - first_inbound_at))::BIGINT ELSE first_reply_seconds END WHERE conversation_id = $3 AND is_current = TRUE",
         "additionalFields": {
-          "queryParams": "={{ [ $json.direction, $json.sent_at, $json.conversation_id ] }}"
+          "queryParams": "={{ [ $json.direction, $json.sent_at, $json.conversation_id, $json.body ] }}"
         }
       },
       "credentials": {
-        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+        "postgres": { "id": "12QmWggJ2O8TMndR", "name": "Postgres n8n_writer" }
       }
     },
     {

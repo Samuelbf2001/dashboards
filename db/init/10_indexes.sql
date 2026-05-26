@@ -96,6 +96,11 @@ CREATE INDEX IF NOT EXISTS idx_conv_reply_time
 CREATE INDEX IF NOT EXISTS idx_conv_current
   ON dim_conversations(conversation_id) WHERE is_current;
 
+-- UNIQUE parcial: garantiza un solo registro activo por conversation_id
+-- Requerido para que ON CONFLICT en upserts funcione correctamente
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_conv_current
+  ON dim_conversations(conversation_id) WHERE is_current;
+
 -- Índice ivfflat para búsqueda semántica de conversaciones similares
 CREATE INDEX IF NOT EXISTS idx_conv_embedding
   ON dim_conversations USING ivfflat(embedding vector_cosine_ops)

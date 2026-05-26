@@ -40,6 +40,26 @@ CREATE TABLE IF NOT EXISTS dim_opportunities (
   custom_fields       JSONB,           -- Custom fields de la oportunidad en JSON
   close_date          DATE,            -- Fecha estimada de cierre
 
+  -- ─── Tracking de fechas por etapa (carpeta Interno en GHL) ───────────────
+  -- Cada par registra cuándo la oportunidad entró y salió de cada etapa.
+  -- Actualizado en tiempo real por WF-14 vía webhook OpportunityStageUpdate.
+  stage_nuevo_lead_entrada       DATE,
+  stage_nuevo_lead_salida        DATE,
+  stage_lead_interesado_entrada  DATE,
+  stage_lead_interesado_salida   DATE,
+  stage_calendario_entrada       DATE,
+  stage_calendario_salida        DATE,
+  stage_agendo_visita_entrada    DATE,
+  stage_agendo_visita_salida     DATE,
+  stage_hot_entrada              DATE,
+  stage_hot_salida               DATE,
+  stage_seguimiento_entrada      DATE,
+  stage_seguimiento_salida       DATE,
+  stage_cierre_ganado_entrada    DATE,
+  stage_cierre_ganado_salida     DATE,
+  stage_cierre_perdido_entrada   DATE,
+  stage_cierre_perdido_salida    DATE,
+
   -- ─── Campos de Inteligencia Artificial ───────────────────────────────────
   ai_win_probability  FLOAT,           -- Probabilidad de ganar (0-1) calculada por IA
   ai_next_action      TEXT,            -- Próxima acción recomendada por IA
