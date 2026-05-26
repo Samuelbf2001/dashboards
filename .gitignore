@@ -17,6 +17,18 @@ desktop.ini
 .idea/
 .vscode/
 
+# Node
+node_modules/
+package-lock.json
+
+# Archivos locales de prueba / exportaciones Metabase
+dashboard4_full.json
+dashboard4_put_payload.json
+package.json
+
+# Artefactos de rutas Windows creados accidentalmente
+C*UsersLenovo*.json
+
 # Logs / runtime
 *.log
 logs/
