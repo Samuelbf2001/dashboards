@@ -5,20 +5,28 @@
       "id": "node-01-webhook",
       "name": "Webhook GHL Oportunidades",
       "type": "n8n-nodes-base.webhook",
-      "position": [240, 304],
+      "position": [
+        240,
+        304
+      ],
       "webhookId": "wf02-ghl-opportunities",
       "parameters": {
-        "path": "ghl/opportunities",
+        "path": "ghl/opportunities/:location_id",
         "httpMethod": "POST",
         "responseMode": "responseNode",
-        "options": { "rawBody": true }
+        "options": {
+          "rawBody": true
+        }
       }
     },
     {
       "id": "node-02-hmac",
       "name": "Validar HMAC GHL",
       "type": "n8n-nodes-base.code",
-      "position": [464, 304],
+      "position": [
+        464,
+        304
+      ],
       "parameters": {
         "jsCode": "// HMAC opcional: GHL Workflows no envían x-ghl-signature — se permite el paso.\n// Solo valida si el header está presente (webhooks nativos de GHL).\nconst sigHeader = $input.first().headers?.['x-ghl-signature'] || '';\n\nif (!sigHeader) {\n  return $input.all();\n}\n\nconst crypto  = require('crypto');\nconst rawBody = $input.first().binary?.data\n  ? Buffer.from($input.first().binary.data, 'base64').toString('utf8')\n  : JSON.stringify($input.first().json);\nconst secret  = $env.WEBHOOK_SECRET;\nif (!secret) throw new Error('WEBHOOK_SECRET no configurado');\n\nconst receivedHex = sigHeader.startsWith('sha256=') ? sigHeader.slice(7) : sigHeader;\nconst receivedBuf = Buffer.from(receivedHex, 'hex');\nconst hmac        = crypto.createHmac('sha256', secret);\nhmac.update(rawBody);\nconst expectedBuf = Buffer.from(hmac.digest('hex'), 'hex');\nif (receivedBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(receivedBuf, expectedBuf)) {\n  throw new Error('HMAC: firma invalida');\n}\nreturn $input.all();"
       }
@@ -27,16 +35,22 @@
       "id": "node-03-sanitize",
       "name": "Sanitizar Oportunidad",
       "type": "n8n-nodes-base.code",
-      "position": [688, 304],
+      "position": [
+        688,
+        304
+      ],
       "parameters": {
-        "jsCode": "// Acepta dos formatos:\n//   A) Webhook nativo GHL: pipelineStageId, locationId, contactId\n//   B) GHL Workflow custom webhook: pipleline_stage (nombre), location.id, contact_id\nconst REGEX_GHL_ID      = /^[a-zA-Z0-9_-]{8,50}$/;\nconst REGEX_LOCATION_ID = /^[a-zA-Z0-9]{10,30}$/;\n\n// Nombre de etapa → ID (para cuando GHL Workflow no envía el stageId)\nconst STAGE_NAME_TO_ID = {\n  'Nuevo lead':      'c9fd9604-1dc8-4816-a77f-3e750603963b',\n  'Lead interesado': '7bdfe336-3bd6-48bd-a251-28228b782901',\n  'Calendario':      '19225629-c452-4e4f-a4ae-90ad9e6aca9b',\n  'Agendó Visita':   '5f8cc1c8-1d83-4d01-9441-6a5b7a155bc1',\n  'Hot':             '5749d2b6-ab1d-4205-9744-bf5e78d9ca8a',\n  'Seguimiento':     '42cbfc36-1ef7-4788-a020-bf12ed1f9eb8',\n  'Cierre Ganado':   '8429d63a-e58e-4c4b-bcbf-7bcffcc72c8a',\n  'Cierre Perdido':  'bdc19de0-5025-4ebf-85e1-7fb5c1518d36'\n};\n\nfunction cleanStr(val, maxLen) {\n  if (val === null || val === undefined) return null;\n  const s = String(val).trim().substring(0, maxLen);\n  return s.length > 0 ? s : null;\n}\nfunction validateGHLId(val) {\n  if (!val) return null;\n  const s = String(val).trim();\n  return REGEX_GHL_ID.test(s) ? s : null;\n}\nfunction parseISODate(val) {\n  if (!val) return null;\n  const ts = Date.parse(String(val));\n  return isNaN(ts) ? null : new Date(ts).toISOString();\n}\nfunction parseFloatSafe(val) {\n  if (val === null || val === undefined || val === '') return null;\n  const n = parseFloat(val);\n  return isNaN(n) ? null : n;\n}\n\nconst raw  = $input.first().json;\nconst body = raw.body || raw;\n\nconst opportunity_id = validateGHLId(body.id || body.opportunityId);\nconst contact_id     = validateGHLId(body.contactId || body.contact_id);\n\n// location_id: nativo (body.locationId) o Workflow (body.location.id)\nconst rawLocationId = body.locationId || (body.location && body.location.id) || '';\nconst location_id   = REGEX_LOCATION_ID.test(String(rawLocationId).trim()) ? String(rawLocationId).trim() : null;\n\nif (!opportunity_id) throw new Error('opportunity_id invalido: ' + (body.id || body.opportunityId));\nif (!contact_id)     throw new Error('contact_id invalido');\nif (!location_id)    throw new Error('location_id invalido: recibido=' + rawLocationId);\n\n// stage: nativo (pipelineStageId) o Workflow (pipleline_stage = nombre con typo)\nconst stage_name_raw    = cleanStr(body.stageName || body.pipleline_stage || body.pipeline_stage, 200);\nconst stage_id_raw      = validateGHLId(body.pipelineStageId || body.stageId);\nconst pipeline_stage_id = stage_id_raw || (stage_name_raw ? (STAGE_NAME_TO_ID[stage_name_raw] || null) : null);\n\nconst validStatuses = ['open', 'won', 'lost', 'abandoned'];\nconst status = cleanStr(body.status, 20);\n\nconst clean = {\n  opportunity_id,\n  contact_id,\n  location_id,\n  pipeline_id:         validateGHLId(body.pipelineId || body.pipeline_id),\n  pipeline_name:       cleanStr(body.pipelineName || body.pipeline_name, 200),\n  pipeline_stage_id,\n  stage_name:          stage_name_raw,\n  status:              validStatuses.includes(status) ? status : null,\n  monetary_value:      parseFloatSafe(body.monetaryValue || body.monetary_value) ?? 0,\n  currency:            cleanStr(body.currency, 3) || 'COP',\n  assigned_to_user_id: validateGHLId(body.assignedTo || body.assigned_to_user_id),\n  assigned_to_name:    cleanStr(body.assignedToName || body.owner, 200),\n  custom_fields:       (body.customFields && typeof body.customFields === 'object') ? body.customFields : null,\n  close_date:          parseISODate(body.closeDate),\n  ghl_created_at:      parseISODate(body.dateAdded || body.createdAt || body.date_created),\n  ghl_updated_at:      parseISODate(body.dateUpdated || body.updatedAt),\n  synced_at:           new Date().toISOString(),\n  _prev_stage_id:      validateGHLId(body.previousStageId || body.prevStageId),\n  _prev_stage_name:    cleanStr(body.previousStageName || body.prevStageName, 200),\n  _changed_at:         parseISODate(body.dateUpdated || body.updatedAt) || new Date().toISOString()\n};\n\nreturn [{ json: clean }];"
+        "jsCode": "// Acepta dos formatos:\n//   A) Webhook nativo GHL: pipelineStageId, locationId, contactId\n//   B) GHL Workflow custom webhook: pipleline_stage (nombre), location.id, contact_id\nconst REGEX_GHL_ID      = /^[a-zA-Z0-9_-]{8,50}$/;\nconst REGEX_LOCATION_ID = /^[a-zA-Z0-9]{10,30}$/;\n\n// Nombre de etapa → ID (para cuando GHL Workflow no envía el stageId)\nconst STAGE_NAME_TO_ID = {\n  'Nuevo lead':      'c9fd9604-1dc8-4816-a77f-3e750603963b',\n  'Lead interesado': '7bdfe336-3bd6-48bd-a251-28228b782901',\n  'Calendario':      '19225629-c452-4e4f-a4ae-90ad9e6aca9b',\n  'Agendó Visita':   '5f8cc1c8-1d83-4d01-9441-6a5b7a155bc1',\n  'Hot':             '5749d2b6-ab1d-4205-9744-bf5e78d9ca8a',\n  'Seguimiento':     '42cbfc36-1ef7-4788-a020-bf12ed1f9eb8',\n  'Cierre Ganado':   '8429d63a-e58e-4c4b-bcbf-7bcffcc72c8a',\n  'Cierre Perdido':  'bdc19de0-5025-4ebf-85e1-7fb5c1518d36'\n};\n\nfunction cleanStr(val, maxLen) {\n  if (val === null || val === undefined) return null;\n  const s = String(val).trim().substring(0, maxLen);\n  return s.length > 0 ? s : null;\n}\nfunction validateGHLId(val) {\n  if (!val) return null;\n  const s = String(val).trim();\n  return REGEX_GHL_ID.test(s) ? s : null;\n}\nfunction parseISODate(val) {\n  if (!val) return null;\n  const ts = Date.parse(String(val));\n  return isNaN(ts) ? null : new Date(ts).toISOString();\n}\nfunction parseFloatSafe(val) {\n  if (val === null || val === undefined || val === '') return null;\n  const n = parseFloat(val);\n  return isNaN(n) ? null : n;\n}\n\nconst raw  = $input.first().json;\nconst body = raw.body || raw;\n\nconst opportunity_id = validateGHLId(body.id || body.opportunityId);\nconst contact_id     = validateGHLId(body.contactId || body.contact_id);\n\n// location_id: nativo (body.locationId) o Workflow (body.location.id)\nconst rawLocationId = (raw.params && raw.params.location_id)\n  ? raw.params.location_id\n  : (body.locationId || (body.location && body.location.id) || '');\nconst location_id   = REGEX_LOCATION_ID.test(String(rawLocationId).trim()) ? String(rawLocationId).trim() : null;\n\nif (!opportunity_id) throw new Error('opportunity_id invalido: ' + (body.id || body.opportunityId));\nif (!contact_id)     throw new Error('contact_id invalido');\nif (!location_id)    throw new Error('location_id invalido: recibido=' + rawLocationId);\n\n// stage: nativo (pipelineStageId) o Workflow (pipleline_stage = nombre con typo)\nconst stage_name_raw    = cleanStr(body.stageName || body.pipleline_stage || body.pipeline_stage, 200);\nconst stage_id_raw      = validateGHLId(body.pipelineStageId || body.stageId);\nconst pipeline_stage_id = stage_id_raw || (stage_name_raw ? (STAGE_NAME_TO_ID[stage_name_raw] || null) : null);\n\nconst validStatuses = ['open', 'won', 'lost', 'abandoned'];\nconst status = cleanStr(body.status, 20);\n\nconst clean = {\n  opportunity_id,\n  contact_id,\n  location_id,\n  pipeline_id:         validateGHLId(body.pipelineId || body.pipeline_id),\n  pipeline_name:       cleanStr(body.pipelineName || body.pipeline_name, 200),\n  pipeline_stage_id,\n  stage_name:          stage_name_raw,\n  status:              validStatuses.includes(status) ? status : null,\n  monetary_value:      parseFloatSafe(body.monetaryValue || body.monetary_value) ?? 0,\n  currency:            cleanStr(body.currency, 3) || 'COP',\n  assigned_to_user_id: validateGHLId(body.assignedTo || body.assigned_to_user_id),\n  assigned_to_name:    cleanStr(body.assignedToName || body.owner, 200),\n  custom_fields:       (body.customFields && typeof body.customFields === 'object') ? body.customFields : null,\n  close_date:          parseISODate(body.closeDate),\n  ghl_created_at:      parseISODate(body.dateAdded || body.createdAt || body.date_created),\n  ghl_updated_at:      parseISODate(body.dateUpdated || body.updatedAt),\n  synced_at:           new Date().toISOString(),\n  _prev_stage_id:      validateGHLId(body.previousStageId || body.prevStageId),\n  _prev_stage_name:    cleanStr(body.previousStageName || body.prevStageName, 200),\n  _changed_at:         parseISODate(body.dateUpdated || body.updatedAt) || new Date().toISOString()\n};\n\nreturn [{ json: clean }];"
       }
     },
     {
       "id": "node-04-scd2-check",
       "name": "Verificar SCD2 dim_opportunities",
       "type": "n8n-nodes-base.postgres",
-      "position": [912, 304],
+      "position": [
+        912,
+        304
+      ],
       "parameters": {
         "operation": "executeQuery",
         "query": "SELECT surrogate_key, opportunity_id, pipeline_stage_id, stage_name, status, monetary_value, assigned_to_user_id, pipeline_id, ghl_updated_at FROM dim_opportunities WHERE opportunity_id = $1 AND is_current = TRUE LIMIT 1",
@@ -46,14 +60,20 @@
         "options": {}
       },
       "credentials": {
-        "postgres": { "id": "12QmWggJ2O8TMndR", "name": "Postgres n8n_writer" }
+        "postgres": {
+          "id": "12QmWggJ2O8TMndR",
+          "name": "Postgres n8n_writer"
+        }
       }
     },
     {
       "id": "node-05-scd2-logic",
       "name": "Logica SCD2 Oportunidades",
       "type": "n8n-nodes-base.code",
-      "position": [1120, 304],
+      "position": [
+        1120,
+        304
+      ],
       "parameters": {
         "jsCode": "const TRACKED = ['pipeline_stage_id', 'status', 'monetary_value', 'assigned_to_user_id', 'pipeline_id'];\nconst incoming = $('Sanitizar Oportunidad').first().json;\nconst existing = $input.first().json;\nconst now = new Date().toISOString();\n\nif (!existing || !existing.surrogate_key) {\n  return [{ json: { action: 'INSERT', stage_changed: true, prev_stage_id: null, prev_stage_name: null, record: Object.assign({}, incoming, { valid_from: now, valid_to: null, is_current: true, change_reason: 'initial_insert' }) } }];\n}\n\nconst changedFields = TRACKED.filter(f => String(existing[f] ?? null) !== String(incoming[f] ?? null));\nconst stageChanged  = changedFields.includes('pipeline_stage_id');\n\nif (changedFields.length > 0) {\n  return [{ json: {\n    action:          'SCD_UPDATE',\n    close_surrogate: existing.surrogate_key,\n    close_valid_to:  now,\n    stage_changed:   stageChanged,\n    prev_stage_id:   existing.pipeline_stage_id,\n    prev_stage_name: existing.stage_name,\n    record:          Object.assign({}, incoming, { valid_from: now, valid_to: null, is_current: true, change_reason: changedFields.map(f => f + '_change').join(', ') })\n  } }];\n}\n\nreturn [{ json: { action: 'UPDATE_MINOR', stage_changed: false, surrogate_key: existing.surrogate_key, synced_at: now, ghl_updated_at: incoming.ghl_updated_at || now, custom_fields: incoming.custom_fields } }];"
       }
@@ -62,15 +82,48 @@
       "id": "node-06-branch",
       "name": "Rama por Accion",
       "type": "n8n-nodes-base.switch",
-      "position": [1344, 304],
+      "position": [
+        1344,
+        304
+      ],
       "parameters": {
         "mode": "expression",
         "output": "={{ $json.action }}",
         "rules": {
           "values": [
-            { "conditions": { "string": [{ "value1": "={{ $json.action }}", "operation": "equal", "value2": "INSERT" }] } },
-            { "conditions": { "string": [{ "value1": "={{ $json.action }}", "operation": "equal", "value2": "SCD_UPDATE" }] } },
-            { "conditions": { "string": [{ "value1": "={{ $json.action }}", "operation": "equal", "value2": "UPDATE_MINOR" }] } }
+            {
+              "conditions": {
+                "string": [
+                  {
+                    "value1": "={{ $json.action }}",
+                    "operation": "equal",
+                    "value2": "INSERT"
+                  }
+                ]
+              }
+            },
+            {
+              "conditions": {
+                "string": [
+                  {
+                    "value1": "={{ $json.action }}",
+                    "operation": "equal",
+                    "value2": "SCD_UPDATE"
+                  }
+                ]
+              }
+            },
+            {
+              "conditions": {
+                "string": [
+                  {
+                    "value1": "={{ $json.action }}",
+                    "operation": "equal",
+                    "value2": "UPDATE_MINOR"
+                  }
+                ]
+              }
+            }
           ]
         }
       }
@@ -79,7 +132,10 @@
       "id": "node-07-insert",
       "name": "INSERT dim_opportunities",
       "type": "n8n-nodes-base.postgres",
-      "position": [1568, 160],
+      "position": [
+        1568,
+        160
+      ],
       "parameters": {
         "operation": "executeQuery",
         "query": "INSERT INTO dim_opportunities (opportunity_id, contact_id, location_id, pipeline_id, pipeline_name, pipeline_stage_id, stage_name, status, monetary_value, currency, assigned_to_user_id, assigned_to_name, custom_fields, close_date, valid_from, valid_to, is_current, change_reason, ghl_created_at, ghl_updated_at, synced_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)",
@@ -89,14 +145,20 @@
         "options": {}
       },
       "credentials": {
-        "postgres": { "id": "12QmWggJ2O8TMndR", "name": "Postgres n8n_writer" }
+        "postgres": {
+          "id": "12QmWggJ2O8TMndR",
+          "name": "Postgres n8n_writer"
+        }
       }
     },
     {
       "id": "node-08-scd-close",
       "name": "SCD2 Cerrar Version Oportunidad",
       "type": "n8n-nodes-base.postgres",
-      "position": [1568, 304],
+      "position": [
+        1568,
+        304
+      ],
       "parameters": {
         "operation": "executeQuery",
         "query": "UPDATE dim_opportunities SET valid_to = $1, is_current = FALSE WHERE surrogate_key = $2",
@@ -106,14 +168,20 @@
         "options": {}
       },
       "credentials": {
-        "postgres": { "id": "12QmWggJ2O8TMndR", "name": "Postgres n8n_writer" }
+        "postgres": {
+          "id": "12QmWggJ2O8TMndR",
+          "name": "Postgres n8n_writer"
+        }
       }
     },
     {
       "id": "node-09-scd-insert",
       "name": "SCD2 INSERT Nueva Version Opp",
       "type": "n8n-nodes-base.postgres",
-      "position": [1792, 304],
+      "position": [
+        1792,
+        304
+      ],
       "parameters": {
         "operation": "executeQuery",
         "query": "INSERT INTO dim_opportunities (opportunity_id, contact_id, location_id, pipeline_id, pipeline_name, pipeline_stage_id, stage_name, status, monetary_value, currency, assigned_to_user_id, assigned_to_name, custom_fields, close_date, valid_from, valid_to, is_current, change_reason, ghl_created_at, ghl_updated_at, synced_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)",
@@ -123,17 +191,28 @@
         "options": {}
       },
       "credentials": {
-        "postgres": { "id": "12QmWggJ2O8TMndR", "name": "Postgres n8n_writer" }
+        "postgres": {
+          "id": "12QmWggJ2O8TMndR",
+          "name": "Postgres n8n_writer"
+        }
       }
     },
     {
       "id": "node-10-stage-check",
       "name": "Hay Cambio de Etapa?",
       "type": "n8n-nodes-base.if",
-      "position": [2000, 304],
+      "position": [
+        2000,
+        304
+      ],
       "parameters": {
         "conditions": {
-          "boolean": [{ "value1": "={{ $('Logica SCD2 Oportunidades').first().json.stage_changed }}", "value2": true }],
+          "boolean": [
+            {
+              "value1": "={{ $('Logica SCD2 Oportunidades').first().json.stage_changed }}",
+              "value2": true
+            }
+          ],
           "combinator": "and",
           "options": {}
         },
@@ -144,7 +223,10 @@
       "id": "node-11-prev-stage",
       "name": "Buscar Ultimo Cambio de Etapa",
       "type": "n8n-nodes-base.postgres",
-      "position": [2224, 220],
+      "position": [
+        2224,
+        220
+      ],
       "parameters": {
         "operation": "executeQuery",
         "query": "SELECT changed_at FROM fact_opp_stage_history WHERE opportunity_id = $1 ORDER BY changed_at DESC LIMIT 1",
@@ -154,14 +236,20 @@
         "options": {}
       },
       "credentials": {
-        "postgres": { "id": "12QmWggJ2O8TMndR", "name": "Postgres n8n_writer" }
+        "postgres": {
+          "id": "12QmWggJ2O8TMndR",
+          "name": "Postgres n8n_writer"
+        }
       }
     },
     {
       "id": "node-12-history",
       "name": "INSERT fact_opp_stage_history",
       "type": "n8n-nodes-base.postgres",
-      "position": [2448, 220],
+      "position": [
+        2448,
+        220
+      ],
       "parameters": {
         "operation": "executeQuery",
         "query": "INSERT INTO fact_opp_stage_history (opportunity_id, contact_id, location_id, from_stage_id, from_stage_name, to_stage_id, to_stage_name, pipeline_id, pipeline_name, monetary_value, status_at_change, assigned_user_id, time_in_prev_stage_sec, changed_at, triggered_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)",
@@ -171,14 +259,20 @@
         "options": {}
       },
       "credentials": {
-        "postgres": { "id": "12QmWggJ2O8TMndR", "name": "Postgres n8n_writer" }
+        "postgres": {
+          "id": "12QmWggJ2O8TMndR",
+          "name": "Postgres n8n_writer"
+        }
       }
     },
     {
       "id": "node-13-minor",
       "name": "UPDATE MINOR dim_opportunities",
       "type": "n8n-nodes-base.postgres",
-      "position": [1568, 448],
+      "position": [
+        1568,
+        448
+      ],
       "parameters": {
         "operation": "executeQuery",
         "query": "UPDATE dim_opportunities SET synced_at = $1, ghl_updated_at = $2, custom_fields = $3 WHERE surrogate_key = $4",
@@ -188,14 +282,20 @@
         "options": {}
       },
       "credentials": {
-        "postgres": { "id": "12QmWggJ2O8TMndR", "name": "Postgres n8n_writer" }
+        "postgres": {
+          "id": "12QmWggJ2O8TMndR",
+          "name": "Postgres n8n_writer"
+        }
       }
     },
     {
       "id": "node-15-get-opp",
       "name": "GET Opportunity GHL",
       "type": "n8n-nodes-base.code",
-      "position": [2672, 220],
+      "position": [
+        2672,
+        220
+      ],
       "parameters": {
         "jsCode": "// Obtiene la oportunidad desde GHL para leer custom fields actuales (fechas por etapa).\nasync function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }\n\nconst { opportunity_id } = $('Sanitizar Oportunidad').first().json;\nconst apiKey = $env.GHL_API_KEY;\nif (!apiKey) throw new Error('GHL_API_KEY no configurado');\n\nlet resp, data;\nfor (let i = 0; i < 4; i++) {\n  resp = await fetch(`https://services.leadconnectorhq.com/opportunities/${opportunity_id}`, {\n    headers: {\n      'Authorization': 'Bearer ' + apiKey,\n      'Version': '2021-07-28'\n    }\n  });\n  if (resp.status === 429) { await sleep(Math.pow(2, i) * 1000); continue; }\n  if (!resp.ok) throw new Error(`GET opportunity ${opportunity_id} -> HTTP ${resp.status}`);\n  data = await resp.json();\n  break;\n}\n\nconst opp = data.opportunity || data;\nreturn [{ json: { opp } }];"
       }
@@ -204,7 +304,10 @@
       "id": "node-16-calc-dates",
       "name": "Calcular Fechas por Etapa",
       "type": "n8n-nodes-base.code",
-      "position": [2896, 220],
+      "position": [
+        2896,
+        220
+      ],
       "parameters": {
         "jsCode": "// Determina qué custom fields DATE actualizar según la etapa nueva.\n// Cierra etapas abiertas (entrada sin salida), abre la nueva si no tiene fecha_entrada.\n\nconst { opp } = $input.first().json;\nconst { pipeline_stage_id: newStageId, opportunity_id: opportunityId } = $('Sanitizar Oportunidad').first().json;\n\nconst STAGE_MAP = {\n  'c9fd9604-1dc8-4816-a77f-3e750603963b': { entradaId: 'aWaEuecxy4bmAqPvVqNJ', salidaId: 'MFMADsY77fpRy7myNODq' },\n  '7bdfe336-3bd6-48bd-a251-28228b782901': { entradaId: 'tcrI9JZqMnPxMh28vFfV', salidaId: 'TuzceQVUoZlU97HLaU2p' },\n  '19225629-c452-4e4f-a4ae-90ad9e6aca9b': { entradaId: '3BbTXzm8zrYlGFrnBdB6', salidaId: 'Voof1iCLXQDqVGPhkww7' },\n  '5f8cc1c8-1d83-4d01-9441-6a5b7a155bc1': { entradaId: 'GYEc6JI3we2JSCxrM3kc', salidaId: 'be4qNCxjt25ghFs7axR6' },\n  '5749d2b6-ab1d-4205-9744-bf5e78d9ca8a': { entradaId: '0OeRKKkytLYf2vlXchbL', salidaId: 'Zne1flxBbYLa8gIyF1zf' },\n  '42cbfc36-1ef7-4788-a020-bf12ed1f9eb8': { entradaId: '2JouertsEonbaIyANlr1', salidaId: 'VtepsKumEVQpj8gNcpFe' },\n  '8429d63a-e58e-4c4b-bcbf-7bcffcc72c8a': { entradaId: 'EMQNXKc41d60L9Om1zuV', salidaId: 'w1tIloODf1Bf2W59zsCh' },\n  'bdc19de0-5025-4ebf-85e1-7fb5c1518d36': { entradaId: 'txHk9M6z4b65FJGWwm34', salidaId: 'eXNeJSvXSyCZRs9ZkeFS' }\n};\n\nif (!newStageId || !STAGE_MAP[newStageId]) {\n  return [{ json: { opportunityId, newStageId, updates: [], hasUpdates: false } }];\n}\n\nconst today = new Date().toISOString().split('T')[0];\n\nconst fieldValues = {};\nfor (const cf of (opp.customFields || [])) {\n  if (cf.id) fieldValues[cf.id] = cf.field_value || cf.value || null;\n}\n\nconst updates = [];\n\nfor (const [stageId, stage] of Object.entries(STAGE_MAP)) {\n  if (stageId === newStageId) continue;\n  if (fieldValues[stage.entradaId] && !fieldValues[stage.salidaId]) {\n    updates.push({ id: stage.salidaId, field_value: today });\n  }\n}\n\nconst newStage = STAGE_MAP[newStageId];\nif (!fieldValues[newStage.entradaId]) {\n  updates.push({ id: newStage.entradaId, field_value: today });\n}\n\nreturn [{ json: { opportunityId, newStageId, updates, hasUpdates: updates.length > 0 } }];"
       }
@@ -213,10 +316,18 @@
       "id": "node-17-if-dates",
       "name": "Hay Fechas que Actualizar?",
       "type": "n8n-nodes-base.if",
-      "position": [3120, 220],
+      "position": [
+        3120,
+        220
+      ],
       "parameters": {
         "conditions": {
-          "boolean": [{ "value1": "={{ $json.hasUpdates }}", "value2": true }],
+          "boolean": [
+            {
+              "value1": "={{ $json.hasUpdates }}",
+              "value2": true
+            }
+          ],
           "combinator": "and",
           "options": {}
         },
@@ -227,7 +338,10 @@
       "id": "node-18-put-fields",
       "name": "PUT Custom Fields GHL",
       "type": "n8n-nodes-base.code",
-      "position": [3344, 160],
+      "position": [
+        3344,
+        160
+      ],
       "parameters": {
         "jsCode": "// Escribe las fechas de entrada/salida de etapa en los custom fields de GHL.\nasync function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }\n\nconst { opportunityId, updates } = $input.first().json;\nconst apiKey = $env.GHL_API_KEY;\nif (!apiKey) throw new Error('GHL_API_KEY no configurado');\n\nconst body = JSON.stringify({ customFields: updates });\n\nlet resp;\nfor (let i = 0; i < 4; i++) {\n  resp = await fetch(`https://services.leadconnectorhq.com/opportunities/${opportunityId}`, {\n    method: 'PUT',\n    headers: {\n      'Authorization': 'Bearer ' + apiKey,\n      'Version': '2021-07-28',\n      'Content-Type': 'application/json'\n    },\n    body\n  });\n  if (resp.status === 429) { await sleep(Math.pow(2, i) * 1000); continue; }\n  if (!resp.ok) {\n    const err = await resp.text();\n    throw new Error(`PUT opportunity ${opportunityId} -> HTTP ${resp.status}: ${err}`);\n  }\n  break;\n}\n\nreturn [{ json: { opportunityId, updatedFields: updates.length, success: true } }];"
       }
@@ -236,79 +350,352 @@
       "id": "node-14-respond",
       "name": "Responder 200 OK",
       "type": "n8n-nodes-base.respondToWebhook",
-      "position": [3568, 304],
+      "position": [
+        3568,
+        304
+      ],
       "parameters": {
         "respondWith": "json",
         "responseBody": "={ \"status\": \"ok\" }",
-        "options": { "responseCode": 200 }
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "node-cf-opps",
+      "name": "Escribir Custom Fields Oportunidad",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2000,
+        700
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO fact_opp_custom_fields\n  (opportunity_id, location_id, field_id, value_text, value_number, value_date, updated_at)\nSELECT\n  $1, $2,\n  cf->>'id',\n  CASE WHEN (cf->>'value') !~ '^\\d{4}-\\d{2}-\\d{2}'\n            AND (cf->>'value') !~ '^-?\\d+(\\.\\d+)?$'\n       THEN cf->>'value' END,\n  CASE WHEN (cf->>'value') ~ '^-?\\d+(\\.\\d+)?$'\n       THEN (cf->>'value')::NUMERIC END,\n  CASE WHEN (cf->>'value') ~ '^\\d{4}-\\d{2}-\\d{2}'\n       THEN (substring(cf->>'value', 1, 10))::DATE END,\n  NOW()\nFROM jsonb_array_elements(COALESCE($3::jsonb, '[]'::jsonb)) cf\nJOIN ghl_field_whitelist w\n  ON  w.location_id = $2\n  AND w.field_id    = cf->>'id'\n  AND w.entity_type = 'opportunity'\n  AND w.active      = TRUE\nWHERE cf->>'id' IS NOT NULL\n  AND cf->>'value' IS NOT NULL\n  AND cf->>'value' <> ''\nON CONFLICT (opportunity_id, field_id) DO UPDATE SET\n  value_text   = EXCLUDED.value_text,\n  value_number = EXCLUDED.value_number,\n  value_date   = EXCLUDED.value_date,\n  updated_at   = NOW()",
+        "additionalFields": {
+          "queryParams": "={{ [ $json.record.opportunity_id, $json.record.location_id, JSON.stringify($json.record.custom_fields) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "postgres-n8n-writer",
+          "name": "Postgres n8n_writer"
+        }
+      }
+    },
+    {
+      "id": "node-verify-loc-02",
+      "name": "Verificar Location",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        988,
+        304
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COUNT(*) AS cnt\nFROM ghl_locations\nWHERE location_id = $1\n  AND active = TRUE",
+        "additionalFields": {
+          "queryParams": "={{ [$json.record.location_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "postgres-n8n-writer",
+          "name": "Postgres n8n_writer"
+        }
+      }
+    },
+    {
+      "id": "node-loc-active-02",
+      "name": "Location Activa?",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        1288,
+        304
+      ],
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.cnt }}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ],
+          "combinator": "and",
+          "options": {}
+        },
+        "options": {}
       }
     }
   ],
   "connections": {
     "Webhook GHL Oportunidades": {
-      "main": [[{ "node": "Validar HMAC GHL", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Validar HMAC GHL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Validar HMAC GHL": {
-      "main": [[{ "node": "Sanitizar Oportunidad", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Sanitizar Oportunidad",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Sanitizar Oportunidad": {
-      "main": [[{ "node": "Verificar SCD2 dim_opportunities", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Verificar Location",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Verificar SCD2 dim_opportunities": {
-      "main": [[{ "node": "Logica SCD2 Oportunidades", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Logica SCD2 Oportunidades",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Logica SCD2 Oportunidades": {
-      "main": [[{ "node": "Rama por Accion", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Rama por Accion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Rama por Accion": {
       "main": [
-        [{ "node": "INSERT dim_opportunities",        "type": "main", "index": 0 }],
-        [{ "node": "SCD2 Cerrar Version Oportunidad",  "type": "main", "index": 0 }],
-        [{ "node": "UPDATE MINOR dim_opportunities",   "type": "main", "index": 0 }]
+        [
+          {
+            "node": "INSERT dim_opportunities",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SCD2 Cerrar Version Oportunidad",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "UPDATE MINOR dim_opportunities",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "INSERT dim_opportunities": {
-      "main": [[{ "node": "Hay Cambio de Etapa?", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Hay Cambio de Etapa?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Escribir Custom Fields Oportunidad",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "SCD2 Cerrar Version Oportunidad": {
-      "main": [[{ "node": "SCD2 INSERT Nueva Version Opp", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "SCD2 INSERT Nueva Version Opp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "SCD2 INSERT Nueva Version Opp": {
-      "main": [[{ "node": "Hay Cambio de Etapa?", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Hay Cambio de Etapa?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Escribir Custom Fields Oportunidad",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Hay Cambio de Etapa?": {
       "main": [
-        [{ "node": "Buscar Ultimo Cambio de Etapa", "type": "main", "index": 0 }],
-        [{ "node": "Responder 200 OK",              "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Buscar Ultimo Cambio de Etapa",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder 200 OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Buscar Ultimo Cambio de Etapa": {
-      "main": [[{ "node": "INSERT fact_opp_stage_history", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "INSERT fact_opp_stage_history",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "INSERT fact_opp_stage_history": {
-      "main": [[{ "node": "GET Opportunity GHL", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "GET Opportunity GHL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "GET Opportunity GHL": {
-      "main": [[{ "node": "Calcular Fechas por Etapa", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Calcular Fechas por Etapa",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Calcular Fechas por Etapa": {
-      "main": [[{ "node": "Hay Fechas que Actualizar?", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Hay Fechas que Actualizar?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Hay Fechas que Actualizar?": {
       "main": [
-        [{ "node": "PUT Custom Fields GHL", "type": "main", "index": 0 }],
-        [{ "node": "Responder 200 OK",      "type": "main", "index": 0 }]
+        [
+          {
+            "node": "PUT Custom Fields GHL",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder 200 OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "PUT Custom Fields GHL": {
-      "main": [[{ "node": "Responder 200 OK", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Responder 200 OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "UPDATE MINOR dim_opportunities": {
-      "main": [[{ "node": "Responder 200 OK", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Responder 200 OK",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Escribir Custom Fields Oportunidad",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verificar Location": {
+      "main": [
+        [
+          {
+            "node": "Location Activa?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Location Activa?": {
+      "main": [
+        [
+          {
+            "node": "Verificar SCD2 dim_opportunities",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder 200 OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "pinData": {},
   "meta": {
     "description": "Webhook GHL para oportunidades. Acepta formato nativo GHL y GHL Workflow. HMAC opcional. Hace SCD2 en dim_opportunities. En cambio de etapa: inserta en fact_opp_stage_history y actualiza custom fields de fecha en GHL."
-  }
+  },
+  "id": "vQ3snQ9mkrvIqwO7"
 }

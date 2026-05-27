@@ -1,8 +1,0 @@
-import { NextResponse } from 'next/server'
-import { COOKIE_NAME } from '@/lib/auth'
-
-export async function POST() {
-  const res = NextResponse.redirect(new URL('/login', process.env.NEXT_PUBLIC_PORTAL_URL || 'http://localhost:4000'))
-  res.cookies.delete(COOKIE_NAME)
-  return res
-}

@@ -10,7 +10,7 @@
         300
       ],
       "parameters": {
-        "path": "ghl/contacts",
+        "path": "ghl/contacts/:location_id",
         "httpMethod": "POST",
         "responseMode": "responseNode",
         "options": {
@@ -39,7 +39,7 @@
         300
       ],
       "parameters": {
-        "jsCode": "// Sanitizar payload del contacto (SEC-06, ETL-08, ETL-09, ETL-10)\n// Funciones copiadas de n8n/lib/sanitize.js\n\nconst REGEX_GHL_ID      = /^[a-zA-Z0-9_-]{8,50}$/;\nconst REGEX_LOCATION_ID = /^[a-zA-Z0-9]{10,30}$/;\nconst REGEX_EMAIL       = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$/;\n\nfunction cleanStr(val, maxLen) {\n  if (val === null || val === undefined) return null;\n  const s = String(val).trim().substring(0, maxLen);\n  return s.length > 0 ? s : null;\n}\n\nfunction normalizeE164(raw) {\n  if (!raw) return null;\n  let digits = String(raw).replace(/[^\\d+]/g, '');\n  if (digits.startsWith('+')) {\n    const clean = '+' + digits.slice(1).replace(/\\D/g, '');\n    return (clean.length >= 8 && clean.length <= 16) ? clean : null;\n  }\n  if (/^3\\d{9}$/.test(digits)) return '+57' + digits;\n  if (/^57\\d{10}$/.test(digits)) return '+' + digits;\n  if (digits.length >= 7 && digits.length <= 15) return '+' + digits;\n  return null;\n}\n\nfunction validateEmail(val) {\n  if (!val) return null;\n  const n = String(val).toLowerCase().trim().substring(0, 255);\n  return REGEX_EMAIL.test(n) ? n : null;\n}\n\nfunction parseISODate(val) {\n  if (!val) return null;\n  const ts = Date.parse(String(val));\n  return isNaN(ts) ? null : new Date(ts).toISOString();\n}\n\nconst raw = $input.first().json;\nconst body = raw.body || raw;\n\nconst contact_id  = REGEX_GHL_ID.test(String(body.id || body.contactId || '').trim())\n  ? String(body.id || body.contactId).trim() : null;\nconst location_id = REGEX_LOCATION_ID.test(String(body.locationId || '').trim())\n  ? String(body.locationId).trim() : null;\n\nif (!contact_id)  throw new Error('contact_id invalido: ' + (body.id || body.contactId));\nif (!location_id) throw new Error('location_id invalido: ' + body.locationId);\n\nconst attrFirst = body.attributionSource || {};\nconst attrLast  = body.lastAttributionSource || {};\n\nconst clean = {\n  contact_id,\n  location_id,\n  email:              validateEmail(body.email),\n  phone:              normalizeE164(body.phone),\n  first_name:         cleanStr(body.firstName  || body.first_name,  100),\n  last_name:          cleanStr(body.lastName   || body.last_name,   100),\n  source:             cleanStr(body.source, 100),\n  tags:               Array.isArray(body.tags) ? body.tags.slice(0, 200).map(t => String(t).trim().substring(0, 200)) : null,\n  contact_type:       cleanStr(body.contactType || body.type, 50),\n  dnd:                body.dnd === true || body.dnd === 'true',\n  custom_fields:      (body.customFields && typeof body.customFields === 'object') ? body.customFields : null,\n  utm_source_first:   cleanStr(attrFirst.utmSource   || body.utm_source_first,   200),\n  utm_medium_first:   cleanStr(attrFirst.utmMedium   || body.utm_medium_first,   200),\n  utm_campaign_first: cleanStr(attrFirst.utmCampaign || body.utm_campaign_first, 200),\n  utm_content_first:  cleanStr(attrFirst.utmContent  || body.utm_content_first,  200),\n  utm_term_first:     cleanStr(attrFirst.utmTerm     || body.utm_term_first,     200),\n  landing_url_first:  cleanStr(attrFirst.url         || body.landing_url_first,  2048),\n  referrer_first:     cleanStr(attrFirst.referrer    || body.referrer_first,     2048),\n  gclid_first:        cleanStr(attrFirst.gclid       || body.gclid_first,        200),\n  fbclid_first:       cleanStr(attrFirst.fbclid      || body.fbclid_first,       200),\n  campaign_id_first:  cleanStr(attrFirst.campaignId  || body.campaign_id_first,  100),\n  utm_source_last:    cleanStr(attrLast.utmSource    || body.utm_source_last,    200),\n  utm_medium_last:    cleanStr(attrLast.utmMedium    || body.utm_medium_last,    200),\n  utm_campaign_last:  cleanStr(attrLast.utmCampaign  || body.utm_campaign_last,  200),\n  utm_content_last:   cleanStr(attrLast.utmContent   || body.utm_content_last,   200),\n  landing_url_last:   cleanStr(attrLast.url          || body.landing_url_last,   2048),\n  ad_id_first:        cleanStr(attrFirst.adId        || body.ad_id_first,        100),\n  ad_id_last:         cleanStr(attrLast.adId         || body.ad_id_last,         100),\n  ctwa_clid_first:    cleanStr(attrFirst.ctwaClid    || body.ctwa_clid_first,    500),\n  ctwa_clid_last:     cleanStr(attrLast.ctwaClid     || body.ctwa_clid_last,     500),\n  ghl_created_at:     parseISODate(body.dateAdded    || body.createdAt),\n  ghl_updated_at:     parseISODate(body.dateUpdated  || body.updatedAt),\n  synced_at:          new Date().toISOString()\n};\n\nreturn [{ json: clean }];"
+        "jsCode": "// Sanitizar payload del contacto (SEC-06, ETL-08, ETL-09, ETL-10)\n// Funciones copiadas de n8n/lib/sanitize.js\n\nconst REGEX_GHL_ID      = /^[a-zA-Z0-9_-]{8,50}$/;\nconst REGEX_LOCATION_ID = /^[a-zA-Z0-9]{10,30}$/;\nconst REGEX_EMAIL       = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$/;\n\nfunction cleanStr(val, maxLen) {\n  if (val === null || val === undefined) return null;\n  const s = String(val).trim().substring(0, maxLen);\n  return s.length > 0 ? s : null;\n}\n\nfunction normalizeE164(raw) {\n  if (!raw) return null;\n  let digits = String(raw).replace(/[^\\d+]/g, '');\n  if (digits.startsWith('+')) {\n    const clean = '+' + digits.slice(1).replace(/\\D/g, '');\n    return (clean.length >= 8 && clean.length <= 16) ? clean : null;\n  }\n  if (/^3\\d{9}$/.test(digits)) return '+57' + digits;\n  if (/^57\\d{10}$/.test(digits)) return '+' + digits;\n  if (digits.length >= 7 && digits.length <= 15) return '+' + digits;\n  return null;\n}\n\nfunction validateEmail(val) {\n  if (!val) return null;\n  const n = String(val).toLowerCase().trim().substring(0, 255);\n  return REGEX_EMAIL.test(n) ? n : null;\n}\n\nfunction parseISODate(val) {\n  if (!val) return null;\n  const ts = Date.parse(String(val));\n  return isNaN(ts) ? null : new Date(ts).toISOString();\n}\n\nconst raw = $input.first().json;\nconst body = raw.body || raw;\n\nconst contact_id  = REGEX_GHL_ID.test(String(body.id || body.contactId || '').trim())\n  ? String(body.id || body.contactId).trim() : null;\nconst _loc_raw = (raw.params && raw.params.location_id)\n  ? raw.params.location_id\n  : (body.locationId || '');\nconst location_id = REGEX_LOCATION_ID.test(String(_loc_raw).trim())\n  ? String(_loc_raw).trim() : null;\n\nif (!contact_id)  throw new Error('contact_id invalido: ' + (body.id || body.contactId));\nif (!location_id) throw new Error('location_id invalido: ' + body.locationId);\n\nconst attrFirst = body.attributionSource || {};\nconst attrLast  = body.lastAttributionSource || {};\n\nconst clean = {\n  contact_id,\n  location_id,\n  email:              validateEmail(body.email),\n  phone:              normalizeE164(body.phone),\n  first_name:         cleanStr(body.firstName  || body.first_name,  100),\n  last_name:          cleanStr(body.lastName   || body.last_name,   100),\n  source:             cleanStr(body.source, 100),\n  tags:               Array.isArray(body.tags) ? body.tags.slice(0, 200).map(t => String(t).trim().substring(0, 200)) : null,\n  contact_type:       cleanStr(body.contactType || body.type, 50),\n  dnd:                body.dnd === true || body.dnd === 'true',\n  custom_fields:      (body.customFields && typeof body.customFields === 'object') ? body.customFields : null,\n  utm_source_first:   cleanStr(attrFirst.utmSource   || body.utm_source_first,   200),\n  utm_medium_first:   cleanStr(attrFirst.utmMedium   || body.utm_medium_first,   200),\n  utm_campaign_first: cleanStr(attrFirst.utmCampaign || body.utm_campaign_first, 200),\n  utm_content_first:  cleanStr(attrFirst.utmContent  || body.utm_content_first,  200),\n  utm_term_first:     cleanStr(attrFirst.utmTerm     || body.utm_term_first,     200),\n  landing_url_first:  cleanStr(attrFirst.url         || body.landing_url_first,  2048),\n  referrer_first:     cleanStr(attrFirst.referrer    || body.referrer_first,     2048),\n  gclid_first:        cleanStr(attrFirst.gclid       || body.gclid_first,        200),\n  fbclid_first:       cleanStr(attrFirst.fbclid      || body.fbclid_first,       200),\n  campaign_id_first:  cleanStr(attrFirst.campaignId  || body.campaign_id_first,  100),\n  utm_source_last:    cleanStr(attrLast.utmSource    || body.utm_source_last,    200),\n  utm_medium_last:    cleanStr(attrLast.utmMedium    || body.utm_medium_last,    200),\n  utm_campaign_last:  cleanStr(attrLast.utmCampaign  || body.utm_campaign_last,  200),\n  utm_content_last:   cleanStr(attrLast.utmContent   || body.utm_content_last,   200),\n  landing_url_last:   cleanStr(attrLast.url          || body.landing_url_last,   2048),\n  ad_id_first:        cleanStr(attrFirst.adId        || body.ad_id_first,        100),\n  ad_id_last:         cleanStr(attrLast.adId         || body.ad_id_last,         100),\n  ctwa_clid_first:    cleanStr(attrFirst.ctwaClid    || body.ctwa_clid_first,    500),\n  ctwa_clid_last:     cleanStr(attrLast.ctwaClid     || body.ctwa_clid_last,     500),\n  ghl_created_at:     parseISODate(body.dateAdded    || body.createdAt),\n  ghl_updated_at:     parseISODate(body.dateUpdated  || body.updatedAt),\n  synced_at:          new Date().toISOString()\n};\n\nreturn [{ json: clean }];"
       }
     },
     {
@@ -245,6 +245,75 @@
           "responseCode": 401
         }
       }
+    },
+    {
+      "id": "node-cf-contacts",
+      "name": "Escribir Custom Fields Contacto",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2000,
+        500
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO fact_contact_custom_fields\n  (contact_id, location_id, field_id, value_text, value_number, value_date, updated_at)\nSELECT\n  $1, $2,\n  cf->>'id',\n  CASE WHEN (cf->>'value') !~ '^\\d{4}-\\d{2}-\\d{2}'\n            AND (cf->>'value') !~ '^-?\\d+(\\.\\d+)?$'\n       THEN cf->>'value' END,\n  CASE WHEN (cf->>'value') ~ '^-?\\d+(\\.\\d+)?$'\n       THEN (cf->>'value')::NUMERIC END,\n  CASE WHEN (cf->>'value') ~ '^\\d{4}-\\d{2}-\\d{2}'\n       THEN (substring(cf->>'value', 1, 10))::DATE END,\n  NOW()\nFROM jsonb_array_elements(COALESCE($3::jsonb, '[]'::jsonb)) cf\nJOIN ghl_field_whitelist w\n  ON  w.location_id = $2\n  AND w.field_id    = cf->>'id'\n  AND w.entity_type = 'contact'\n  AND w.active      = TRUE\nWHERE cf->>'id' IS NOT NULL\n  AND cf->>'value' IS NOT NULL\n  AND cf->>'value' <> ''\nON CONFLICT (contact_id, field_id) DO UPDATE SET\n  value_text   = EXCLUDED.value_text,\n  value_number = EXCLUDED.value_number,\n  value_date   = EXCLUDED.value_date,\n  updated_at   = NOW()",
+        "additionalFields": {
+          "queryParams": "={{ [ $json.record.contact_id, $json.record.location_id, JSON.stringify($json.record.custom_fields) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "postgres-n8n-writer",
+          "name": "Postgres n8n_writer"
+        }
+      }
+    },
+    {
+      "id": "node-verify-loc-01",
+      "name": "Verificar Location",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        980,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COUNT(*) AS cnt\nFROM ghl_locations\nWHERE location_id = $1\n  AND active = TRUE",
+        "additionalFields": {
+          "queryParams": "={{ [$json.record.location_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "postgres-n8n-writer",
+          "name": "Postgres n8n_writer"
+        }
+      }
+    },
+    {
+      "id": "node-loc-active-01",
+      "name": "Location Activa?",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        1280,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.cnt }}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ],
+          "combinator": "and",
+          "options": {}
+        },
+        "options": {}
+      }
     }
   ],
   "connections": {
@@ -274,7 +343,7 @@
       "main": [
         [
           {
-            "node": "Verificar SCD2 dim_contacts",
+            "node": "Verificar Location",
             "type": "main",
             "index": 0
           }
@@ -346,6 +415,11 @@
             "node": "Responder 200 OK",
             "type": "main",
             "index": 0
+          },
+          {
+            "node": "Escribir Custom Fields Contacto",
+            "type": "main",
+            "index": 0
           }
         ]
       ]
@@ -357,12 +431,51 @@
             "node": "Responder 200 OK",
             "type": "main",
             "index": 0
+          },
+          {
+            "node": "Escribir Custom Fields Contacto",
+            "type": "main",
+            "index": 0
           }
         ]
       ]
     },
     "UPDATE MINOR dim_contacts": {
       "main": [
+        [
+          {
+            "node": "Responder 200 OK",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Escribir Custom Fields Contacto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verificar Location": {
+      "main": [
+        [
+          {
+            "node": "Location Activa?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Location Activa?": {
+      "main": [
+        [
+          {
+            "node": "Verificar SCD2 dim_contacts",
+            "type": "main",
+            "index": 0
+          }
+        ],
         [
           {
             "node": "Responder 200 OK",
@@ -378,5 +491,6 @@
     "saveDataSuccessExecution": "none",
     "saveManualExecutions": false,
     "errorWorkflow": ""
-  }
+  },
+  "id": "Khg0te6ENzS5rPCc"
 }

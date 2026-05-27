@@ -5,19 +5,27 @@
       "id": "node-01-webhook",
       "name": "Webhook GHL Citas",
       "type": "n8n-nodes-base.webhook",
-      "position": [240, 300],
+      "position": [
+        240,
+        300
+      ],
       "parameters": {
-        "path": "ghl/appointments",
+        "path": "ghl/appointments/:location_id",
         "httpMethod": "POST",
         "responseMode": "responseNode",
-        "options": { "rawBody": true }
+        "options": {
+          "rawBody": true
+        }
       }
     },
     {
       "id": "node-02-hmac",
       "name": "Validar HMAC GHL",
       "type": "n8n-nodes-base.code",
-      "position": [460, 300],
+      "position": [
+        460,
+        300
+      ],
       "parameters": {
         "jsCode": "const crypto = require('crypto');\nconst rawBody   = $input.first().binary?.data ? Buffer.from($input.first().binary.data, 'base64').toString('utf8') : JSON.stringify($input.first().json);\nconst sigHeader = $input.first().headers['x-ghl-signature'] || '';\nconst secret    = $env.WEBHOOK_SECRET;\nif (!secret) throw new Error('WEBHOOK_SECRET no configurado');\nif (!sigHeader) throw new Error('HMAC: header X-GHL-Signature ausente');\nconst receivedHex = sigHeader.startsWith('sha256=') ? sigHeader.slice(7) : sigHeader;\nconst receivedBuf = Buffer.from(receivedHex, 'hex');\nconst hmac = crypto.createHmac('sha256', secret);\nhmac.update(rawBody);\nconst expectedBuf = Buffer.from(hmac.digest('hex'), 'hex');\nif (receivedBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(receivedBuf, expectedBuf)) {\n  throw new Error('HMAC: firma invalida');\n}\nreturn $input.all();"
       }
@@ -26,16 +34,22 @@
       "id": "node-03-sanitize",
       "name": "Sanitizar Cita",
       "type": "n8n-nodes-base.code",
-      "position": [680, 300],
+      "position": [
+        680,
+        300
+      ],
       "parameters": {
-        "jsCode": "// Sanitizar payload de cita GHL\n// Tabla destino: ghl_appointments (fallback DDL en n8n/lib/appointments_schema.sql)\nconst REGEX_GHL_ID      = /^[a-zA-Z0-9_-]{8,50}$/;\nconst REGEX_LOCATION_ID = /^[a-zA-Z0-9]{10,30}$/;\n\nfunction cleanStr(val, maxLen) {\n  if (!val) return null;\n  const s = String(val).trim().substring(0, maxLen);\n  return s.length > 0 ? s : null;\n}\nfunction validateGHLId(val) {\n  if (!val) return null;\n  const s = String(val).trim();\n  return REGEX_GHL_ID.test(s) ? s : null;\n}\nfunction parseISODate(val) {\n  if (!val) return null;\n  const ts = Date.parse(String(val));\n  return isNaN(ts) ? null : new Date(ts).toISOString();\n}\n\nconst raw  = $input.first().json;\nconst body = raw.body || raw;\n\nconst appointment_id = validateGHLId(body.id || body.appointmentId);\nconst contact_id     = validateGHLId(body.contactId || body.contact_id);\nconst location_id    = REGEX_LOCATION_ID.test(String(body.locationId || '').trim()) ? String(body.locationId).trim() : null;\n\nif (!appointment_id) throw new Error('appointment_id invalido: ' + (body.id || body.appointmentId));\nif (!contact_id)     throw new Error('contact_id invalido');\nif (!location_id)    throw new Error('location_id invalido');\n\nreturn [{ json: {\n  appointment_id,\n  contact_id,\n  location_id,\n  calendar_id:      validateGHLId(body.calendarId),\n  title:            cleanStr(body.title, 500),\n  status:           cleanStr(body.appointmentStatus || body.status, 30),\n  start_time:       parseISODate(body.startTime),\n  end_time:         parseISODate(body.endTime),\n  assigned_user_id: validateGHLId(body.assignedUserId || body.userId),\n  notes:            body.notes ? String(body.notes).substring(0, 5000) : null,\n  address:          cleanStr(body.address, 500),\n  ghl_created_at:   parseISODate(body.dateAdded || body.createdAt),\n  ghl_updated_at:   parseISODate(body.dateUpdated || body.updatedAt),\n  synced_at:        new Date().toISOString()\n} }];"
+        "jsCode": "// Sanitizar payload de cita GHL\n// Tabla destino: ghl_appointments (fallback DDL en n8n/lib/appointments_schema.sql)\nconst REGEX_GHL_ID      = /^[a-zA-Z0-9_-]{8,50}$/;\nconst REGEX_LOCATION_ID = /^[a-zA-Z0-9]{10,30}$/;\n\nfunction cleanStr(val, maxLen) {\n  if (!val) return null;\n  const s = String(val).trim().substring(0, maxLen);\n  return s.length > 0 ? s : null;\n}\nfunction validateGHLId(val) {\n  if (!val) return null;\n  const s = String(val).trim();\n  return REGEX_GHL_ID.test(s) ? s : null;\n}\nfunction parseISODate(val) {\n  if (!val) return null;\n  const ts = Date.parse(String(val));\n  return isNaN(ts) ? null : new Date(ts).toISOString();\n}\n\nconst raw  = $input.first().json;\nconst body = raw.body || raw;\n\nconst appointment_id = validateGHLId(body.id || body.appointmentId);\nconst contact_id     = validateGHLId(body.contactId || body.contact_id);\nconst _loc_raw = (raw.params && raw.params.location_id)\n  ? raw.params.location_id\n  : (body.locationId || '');\nconst location_id    = REGEX_LOCATION_ID.test(String(_loc_raw).trim()) ? String(_loc_raw).trim() : null;\n\nif (!appointment_id) throw new Error('appointment_id invalido: ' + (body.id || body.appointmentId));\nif (!contact_id)     throw new Error('contact_id invalido');\nif (!location_id)    throw new Error('location_id invalido');\n\nreturn [{ json: {\n  appointment_id,\n  contact_id,\n  location_id,\n  calendar_id:      validateGHLId(body.calendarId),\n  title:            cleanStr(body.title, 500),\n  status:           cleanStr(body.appointmentStatus || body.status, 30),\n  start_time:       parseISODate(body.startTime),\n  end_time:         parseISODate(body.endTime),\n  assigned_user_id: validateGHLId(body.assignedUserId || body.userId),\n  notes:            body.notes ? String(body.notes).substring(0, 5000) : null,\n  address:          cleanStr(body.address, 500),\n  ghl_created_at:   parseISODate(body.dateAdded || body.createdAt),\n  ghl_updated_at:   parseISODate(body.dateUpdated || body.updatedAt),\n  synced_at:        new Date().toISOString()\n} }];"
       }
     },
     {
       "id": "node-04-upsert",
       "name": "Upsert ghl_appointments",
       "type": "n8n-nodes-base.postgres",
-      "position": [900, 300],
+      "position": [
+        900,
+        300
+      ],
       "parameters": {
         "operation": "executeQuery",
         "query": "INSERT INTO ghl_appointments (appointment_id, contact_id, location_id, calendar_id, title, status, start_time, end_time, assigned_user_id, notes, address, ghl_created_at, ghl_updated_at, synced_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT (appointment_id) DO UPDATE SET status = EXCLUDED.status, title = EXCLUDED.title, start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time, assigned_user_id = EXCLUDED.assigned_user_id, notes = EXCLUDED.notes, address = EXCLUDED.address, ghl_updated_at = EXCLUDED.ghl_updated_at, synced_at = EXCLUDED.synced_at",
@@ -44,38 +58,154 @@
         }
       },
       "credentials": {
-        "postgres": { "id": "postgres-n8n-writer", "name": "Postgres n8n_writer" }
+        "postgres": {
+          "id": "postgres-n8n-writer",
+          "name": "Postgres n8n_writer"
+        }
       }
     },
     {
       "id": "node-05-respond",
       "name": "Responder 200 OK",
       "type": "n8n-nodes-base.respondToWebhook",
-      "position": [1120, 300],
+      "position": [
+        1120,
+        300
+      ],
       "parameters": {
         "respondWith": "json",
         "responseBody": "={ \"status\": \"ok\" }",
-        "options": { "responseCode": 200 }
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "node-verify-loc-04",
+      "name": "Verificar Location",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        980,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COUNT(*) AS cnt\nFROM ghl_locations\nWHERE location_id = $1\n  AND active = TRUE",
+        "additionalFields": {
+          "queryParams": "={{ [$json.record.location_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "postgres-n8n-writer",
+          "name": "Postgres n8n_writer"
+        }
+      }
+    },
+    {
+      "id": "node-loc-active-04",
+      "name": "Location Activa?",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        1280,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.cnt }}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ],
+          "combinator": "and",
+          "options": {}
+        },
+        "options": {}
       }
     }
   ],
   "connections": {
     "Webhook GHL Citas": {
-      "main": [[{ "node": "Validar HMAC GHL", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Validar HMAC GHL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Validar HMAC GHL": {
-      "main": [[{ "node": "Sanitizar Cita", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Sanitizar Cita",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Sanitizar Cita": {
-      "main": [[{ "node": "Upsert ghl_appointments", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Verificar Location",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Upsert ghl_appointments": {
-      "main": [[{ "node": "Responder 200 OK", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Responder 200 OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verificar Location": {
+      "main": [
+        [
+          {
+            "node": "Location Activa?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Location Activa?": {
+      "main": [
+        [
+          {
+            "node": "Upsert ghl_appointments",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder 200 OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "settings": {
     "executionOrder": "v1",
     "saveDataSuccessExecution": "none",
     "saveManualExecutions": false
-  }
+  },
+  "id": "8aO2NqyGxTnpYCY8"
 }
